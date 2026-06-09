@@ -13,10 +13,19 @@ generation toolchain.
 - **`number/`** — `Intl.NumberFormat`-style decimal/percent/currency formatting.
   `number.go` is the entry point; `locale.go` resolves locale data (per-locale
   tables live in the opt-in `number/locales/<tag>` packages); `pattern.go`
-  and `round.go` handle pattern application and rounding; `plural_bridge.go` exposes
-  the plural-category lookups used for currency display names (it imports `plural`).
+  handles pattern application and rounding uses `internal/decimal`;
+  `plural_bridge.go` exposes the plural-category lookups used for currency display
+  names (it imports `plural`).
 - **`plural/`** — CLDR cardinal/ordinal plural categories, compiled from the CLDR
   plural rules into Go predicates in `tables_gen.go` (no per-locale packages).
+
+## Shared internals
+
+- **`internal/decimal`** — half-away-from-zero rounding on the shortest
+  round-tripping decimal of a `float64`, so `number` and `plural` derive identical
+  digits (matching what `Intl` rounds).
+- **`internal/cldr`** — CLDR-derived tables shared by the code generators (e.g. the
+  ICU numbering-system overrides used by both the number and datetime generators).
 
 ## Locale data (opt-in)
 
