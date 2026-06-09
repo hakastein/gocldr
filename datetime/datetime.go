@@ -45,7 +45,7 @@ type Options struct {
 	TimeStyle              string // "full" | "long" | "medium" | "short"
 	DayPeriod              string // "narrow" | "short" | "long"
 	FractionalSecondDigits *int   // 1..3
-	Calendar               string // only "gregory"/"gregorian" supported
+	Calendar               string // only the Gregorian calendar is implemented; other values are ignored
 	NumberingSystem        string // overrides the locale default
 	TimeZone               string // IANA name; defaults to local
 }

@@ -145,8 +145,10 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 		return c.quarter(ch, count, t)
 	case 'z', 'Z', 'O', 'v', 'V', 'X', 'x': // zone
 		return c.zone(ch, count, t)
-	case 'w', 'W': // week of year / month (rarely used here)
+	case 'w': // week of year (ISO approximation; CLDR locale week data is not modelled)
 		return c.num(isoWeek(t), count)
+	case 'W': // week of month
+		return c.num(weekOfMonth(t), count)
 	}
 	// Unknown letter: emit as-is.
 	return strings.Repeat(string(ch), count)
@@ -155,6 +157,15 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 func isoWeek(t time.Time) int {
 	_, w := t.ISOWeek()
 	return w
+}
+
+// weekOfMonth returns the 1-based week number within the month as successive
+// seven-day blocks from the 1st. CLDR's locale-aware week-of-month (which
+// depends on the first day of the week and the minimal-days rule) is not
+// modelled; this field is unreachable through Options and exists only for raw
+// CLDR patterns that contain 'W'.
+func weekOfMonth(t time.Time) int {
+	return (t.Day()-1)/7 + 1
 }
 
 func (c *formatCtx) era(count int, t time.Time) string {

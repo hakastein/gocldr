@@ -147,7 +147,7 @@ type roundSpec struct {
 func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) roundSpec {
 	rs := roundSpec{minInt: 1}
 	if o.MinimumIntegerDigits != nil {
-		rs.minInt = *o.MinimumIntegerDigits
+		rs.minInt = clampInt(*o.MinimumIntegerDigits, 1, 21)
 	}
 
 	if o.MinimumSignificantDigits != nil || o.MaximumSignificantDigits != nil {
@@ -155,14 +155,14 @@ func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) r
 		rs.minSig = 1
 		rs.maxSig = 21
 		if o.MinimumSignificantDigits != nil {
-			rs.minSig = *o.MinimumSignificantDigits
+			rs.minSig = clampInt(*o.MinimumSignificantDigits, 1, 21)
 		}
 		if o.MaximumSignificantDigits != nil {
-			rs.maxSig = *o.MaximumSignificantDigits
+			rs.maxSig = clampInt(*o.MaximumSignificantDigits, 1, 21)
 		}
-		// Intl throws a RangeError when minSig > maxSig; as a best-effort,
-		// no-panic formatter we instead clamp the maximum up to the minimum
-		// (intentional divergence).
+		// Intl throws a RangeError for out-of-range or min>max digit counts; as a
+		// best-effort, no-panic formatter we clamp into range and raise the
+		// maximum up to the minimum instead (intentional divergence).
 		if rs.maxSig < rs.minSig {
 			rs.maxSig = rs.minSig
 		}
@@ -197,10 +197,23 @@ func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) r
 			rs.minFr = rs.maxFr
 		}
 	}
+	rs.minFr = clampInt(rs.minFr, 0, 100)
+	rs.maxFr = clampInt(rs.maxFr, 0, 100)
 	if rs.maxFr < rs.minFr {
 		rs.maxFr = rs.minFr
 	}
 	return rs
+}
+
+// clampInt constrains v to the inclusive range [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // formatMagnitude rounds and formats the non-negative magnitude into integer

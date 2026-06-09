@@ -184,3 +184,23 @@ func TestUnknownLocaleDegradesToRoot(t *testing.T) {
 	got := number.Format("zz", 1234.5, number.Options{})
 	assert.Equal(t, "1,234.5", got)
 }
+
+// TestOutOfRangeOptionsDoNotPanic verifies digit-count options outside Intl's
+// documented ranges are clamped rather than panicking. Intl throws a RangeError;
+// this no-panic formatter clamps into range instead.
+func TestOutOfRangeOptionsDoNotPanic(t *testing.T) {
+	intp := func(v int) *int { return &v }
+	cases := []number.Options{
+		{MinimumIntegerDigits: intp(0)},
+		{MinimumIntegerDigits: intp(-5)},
+		{MaximumFractionDigits: intp(1000)},
+		{MinimumFractionDigits: intp(-1)},
+		{MinimumSignificantDigits: intp(0), MaximumSignificantDigits: intp(0)},
+		{MaximumSignificantDigits: intp(10000)},
+	}
+	for _, opts := range cases {
+		assert.NotPanics(t, func() {
+			_ = number.Format("en", 1234.5, opts)
+		})
+	}
+}
