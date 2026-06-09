@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs inside the pinned gen image (see gen/Dockerfile). Regenerates every cldr/*
+# Runs inside the pinned gen image (see gen/Dockerfile). Regenerates every CLDR
 # table and its golden Intl fixtures against the single pinned CLDR release, then
 # verifies the module. Invoke via `make gen`, never on the host.
 set -eu
@@ -11,7 +11,7 @@ echo "==> Node $(node -v) | ICU $(node -e 'process.stdout.write(process.versions
 echo "==> CLDR JSON: ${CLDR_DATA}"
 echo "==> go $(go version)"
 
-# Each cldr/* package's //go:generate directives run both its table generator
+# Each package's //go:generate directives run both its table generator
 # (reading $CLDR_DATA) and its Node fixture dump (using this image's Intl.*).
 echo "==> go generate ./..."
 go generate ./...

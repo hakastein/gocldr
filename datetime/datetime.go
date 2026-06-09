@@ -40,7 +40,7 @@ type Options struct {
 	Hour                   string // "numeric" | "2-digit"
 	Minute                 string // "numeric" | "2-digit"
 	Second                 string // "numeric" | "2-digit"
-	TimeZoneName           string // "long" | "short"
+	TimeZoneName           string // "long" | "short" | "shortOffset" | "longOffset" | "shortGeneric" | "longGeneric"
 	DateStyle              string // "full" | "long" | "medium" | "short"
 	TimeStyle              string // "full" | "long" | "medium" | "short"
 	DayPeriod              string // "narrow" | "short" | "long"
