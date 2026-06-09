@@ -30,24 +30,18 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+
+	"github.com/hakastein/gocldr/internal/cldr"
 )
 
 func main() {
-	// Default CLDR base dir: honour $CLDR_DATA first, then fall back to the
-	// host-relative path that was hardcoded before this change so that running
-	// go generate without the env var continues to work on the host machine.
-	//
-	// go generate sets the working directory to the package directory
-	// (number/), which is two levels below the repo root where
-	// .reference/cldr-data lives.
-	defaultCLDR := os.Getenv("CLDR_DATA")
-	if defaultCLDR == "" {
-		defaultCLDR = filepath.Join("..", "..", ".reference", "cldr-data", "node_modules")
-	}
-
-	cldr := flag.String("cldr", defaultCLDR, "path to node_modules containing cldr-numbers-full and cldr-core")
+	cldr := flag.String("cldr", os.Getenv("CLDR_DATA"), "path to node_modules containing cldr-numbers-full and cldr-core")
 	out := flag.String("out", "tables_gen.go", "output file")
 	flag.Parse()
+
+	if *cldr == "" {
+		log.Fatal("gen: CLDR_DATA is unset; run via `make gen`, never on the host")
+	}
 
 	g := &generator{cldr: *cldr}
 	g.run(*out)
@@ -176,31 +170,6 @@ func (g *generator) loadLocales() {
 	}
 }
 
-// minGroupingOverride patches minimumGroupingDigits for locales where CLDR 46+
-// (and thus Node's ICU / JS) differs from the bundled CLDR 45 data.
-var minGroupingOverride = map[string]int{
-	"ie":    2,
-	"it":    2,
-	"it-CH": 2,
-	"it-SM": 2,
-	"it-VA": 2,
-	"sl":    2,
-}
-
-// icuNumberingOverride pins the numbering system for region-neutral locales
-// where ICU/JS disagrees with the bundled CLDR defaultNumberingSystem. Derived
-// by comparing CLDR data to Node full-ICU resolvedOptions().numberingSystem.
-var icuNumberingOverride = map[string]string{
-	"ar":       "latn",
-	"az-Arab":  "latn",
-	"bgn":      "latn",
-	"hnj":      "latn",
-	"hnj-Hmnp": "latn",
-	"mni-Mtei": "beng",
-	"sat-Deva": "olck",
-	"sdh":      "latn",
-}
-
 func (g *generator) loadLocale(loc string) {
 	numPath := filepath.Join(g.cldr, "cldr-numbers-full", "main", loc, "numbers.json")
 	raw, err := os.ReadFile(numPath)
@@ -213,7 +182,7 @@ func (g *generator) loadLocale(loc string) {
 		} `json:"main"`
 	}
 	if err := json.Unmarshal(raw, &top); err != nil {
-		return
+		log.Fatalf("gen: parse %s: %v", numPath, err)
 	}
 	numbers := top.Main[loc].Numbers
 	if numbers == nil {
@@ -229,7 +198,7 @@ func (g *generator) loadLocale(loc string) {
 	// the likely-subtags maximization of the bare tag does). Match ICU so the
 	// formatter agrees with JS. Region-specific variants (e.g. ar-EG) keep
 	// their CLDR default.
-	if ns, ok := icuNumberingOverride[loc]; ok {
+	if ns, ok := cldr.ICUNumberingOverride[loc]; ok {
 		defaultNS = ns
 	}
 	minGroup := 1
@@ -237,12 +206,6 @@ func (g *generator) loadLocale(loc string) {
 		if v, err := strconv.Atoi(mg); err == nil {
 			minGroup = v
 		}
-	}
-	// Data-version patch: CLDR 46 bumped minimumGroupingDigits to 2 for these
-	// locales. The bundled cldr-data is CLDR 45 but Node's ICU (and thus JS) is
-	// newer, so apply the newer value to match Intl.NumberFormat.
-	if minGroupingOverride[loc] != 0 {
-		minGroup = minGroupingOverride[loc]
 	}
 
 	// Symbols for the default numbering system.
@@ -391,7 +354,7 @@ func (g *generator) loadCurrencyDisplay(loc string) {
 		} `json:"main"`
 	}
 	if err := json.Unmarshal(raw, &top); err != nil {
-		return
+		log.Fatalf("gen: parse %s: %v", path, err)
 	}
 	curs := top.Main[loc].Numbers.Currencies
 	if len(curs) == 0 {
@@ -505,7 +468,7 @@ func (g *generator) emit(out string) {
 	p("// currencyDigits maps an ISO 4217 code to its CLDR default fraction digits.\n")
 	p("// Codes absent here use defaultCurrencyDigits (2).\n")
 	p("var currencyDigits = map[string]int8{\n")
-	for _, k := range sortedIntKeys(g.currencyDigits) {
+	for _, k := range sortedKeys(g.currencyDigits) {
 		p("\t%s: %d,\n", q(k), g.currencyDigits[k])
 	}
 	p("}\n\n")
@@ -527,7 +490,7 @@ func (g *generator) emit(out string) {
 	// //go:generate working directory).
 	localesDir := filepath.Join(filepath.Dir(out), "locales")
 
-	locKeys := sortedEntryKeys(g.localeEntries)
+	locKeys := sortedKeys(g.localeEntries)
 
 	// One self-registering package per locale: locales/<tag>/data_gen.go.
 	for _, loc := range locKeys {
@@ -674,25 +637,9 @@ func jsonString(raw json.RawMessage) string {
 
 func q(s string) string { return strconv.Quote(s) }
 
-func sortedKeys(m map[string]string) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedIntKeys(m map[string]int) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedEntryKeys(m map[string]*localeEntry) []string {
+// sortedKeys returns the keys of m in ascending order. Generated output is
+// emitted in this order so it stays stable across Go's randomized map iteration.
+func sortedKeys[V any](m map[string]V) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

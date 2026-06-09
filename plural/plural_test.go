@@ -25,6 +25,8 @@ func TestOperandsFromString(t *testing.T) {
 		// compact exponent scales the value; c retains the exponent.
 		{name: "compact exponent", in: "1c6", want: plural.Operands{N: 1000000, I: 1000000, C: 6}},
 		{name: "compact with fraction", in: "1.0000001c6", want: plural.Operands{N: 1000000.1, I: 1000000, V: 1, W: 1, F: 1, T: 1, C: 6}},
+		{name: "scientific exponent (e alias)", in: "1.2e6", want: plural.Operands{N: 1200000, I: 1200000, C: 6}},
+		{name: "negative exponent shifts left", in: "1.5e-3", want: plural.Operands{N: 0.0015, I: 0, V: 4, W: 4, F: 15, T: 15, C: -3}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {

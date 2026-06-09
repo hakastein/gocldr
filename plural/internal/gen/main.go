@@ -35,11 +35,6 @@ import (
 	"strings"
 )
 
-// defaultCLDRData is the node_modules dir used when $CLDR_DATA is unset (the
-// checked-in host copy). The pinned Docker toolchain sets CLDR_DATA to its own
-// node_modules path, so host behaviour is unchanged when CLDR_DATA is absent.
-const defaultCLDRData = "../../.reference/cldr-data/node_modules"
-
 func main() {
 	log.SetFlags(0)
 	plularsPath := flag.String("plurals", "", "path to plurals.json (overrides $CLDR_DATA)")
@@ -49,7 +44,7 @@ func main() {
 
 	base := os.Getenv("CLDR_DATA")
 	if base == "" {
-		base = defaultCLDRData
+		log.Fatal("gen: CLDR_DATA is unset; run via `make gen`, never on the host")
 	}
 	if *plularsPath == "" {
 		*plularsPath = filepath.Join(base, "cldr-core", "supplemental", "plurals.json")

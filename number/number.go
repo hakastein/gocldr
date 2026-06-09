@@ -13,7 +13,9 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
+	"github.com/hakastein/gocldr/internal/decimal"
 	"github.com/hakastein/gocldr/number/internal/data"
 )
 
@@ -146,7 +148,7 @@ type roundSpec struct {
 func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) roundSpec {
 	rs := roundSpec{minInt: 1}
 	if o.MinimumIntegerDigits != nil {
-		rs.minInt = *o.MinimumIntegerDigits
+		rs.minInt = clampInt(*o.MinimumIntegerDigits, 1, 21)
 	}
 
 	if o.MinimumSignificantDigits != nil || o.MaximumSignificantDigits != nil {
@@ -154,14 +156,14 @@ func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) r
 		rs.minSig = 1
 		rs.maxSig = 21
 		if o.MinimumSignificantDigits != nil {
-			rs.minSig = *o.MinimumSignificantDigits
+			rs.minSig = clampInt(*o.MinimumSignificantDigits, 1, 21)
 		}
 		if o.MaximumSignificantDigits != nil {
-			rs.maxSig = *o.MaximumSignificantDigits
+			rs.maxSig = clampInt(*o.MaximumSignificantDigits, 1, 21)
 		}
-		// Intl throws a RangeError when minSig > maxSig; as a best-effort,
-		// no-panic formatter we instead clamp the maximum up to the minimum
-		// (intentional divergence).
+		// Intl throws a RangeError for out-of-range or min>max digit counts; as a
+		// best-effort, no-panic formatter we clamp into range and raise the
+		// maximum up to the minimum instead (intentional divergence).
 		if rs.maxSig < rs.minSig {
 			rs.maxSig = rs.minSig
 		}
@@ -196,10 +198,23 @@ func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) r
 			rs.minFr = rs.maxFr
 		}
 	}
+	rs.minFr = clampInt(rs.minFr, 0, 100)
+	rs.maxFr = clampInt(rs.maxFr, 0, 100)
 	if rs.maxFr < rs.minFr {
 		rs.maxFr = rs.minFr
 	}
 	return rs
+}
+
+// clampInt constrains v to the inclusive range [lo, hi].
+func clampInt(v, lo, hi int) int {
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
 }
 
 // formatMagnitude rounds and formats the non-negative magnitude into integer
@@ -211,7 +226,7 @@ func formatMagnitude(abs float64, rs roundSpec) (string, string) {
 	}
 
 	// Round to maxFr fraction digits, half away from zero.
-	intPart, fracPart := roundFixed(abs, rs.maxFr)
+	intPart, fracPart := decimal.RoundFixed(abs, rs.maxFr)
 
 	// Trim trailing zeros down to minFr.
 	fracPart = trimFracTo(fracPart, rs.minFr)
@@ -222,15 +237,11 @@ func formatMagnitude(abs float64, rs roundSpec) (string, string) {
 }
 
 // formatSignificant formats abs with the given significant-digit constraints,
-// matching Intl's behaviour: round to maxSig significant digits (half-expand),
-// then show between minSig and maxSig significant digits (trailing zeros beyond
-// minSig are trimmed, those needed to reach minSig are kept and are
-// significant).
-//
-// The implementation works on the canonical significant-digit string s (no
-// leading zeros) and a base-10 exponent so that the value equals
-// s * 10^(exp - (len(s)-1)), then rounds at the maxSig boundary and places the
-// decimal point.
+// matching Intl: round to maxSig significant digits (half-expand), then show
+// between minSig and maxSig significant digits (trailing zeros beyond minSig are
+// trimmed; those needed to reach minSig are kept and significant). It operates
+// on the significant-digit string plus the exponent of its most significant
+// digit, rounds at the maxSig boundary, then places the decimal point.
 func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string) {
 	if abs == 0 {
 		intPart := "0"
@@ -244,13 +255,13 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 		return intPart, strings.Repeat("0", fracDigits)
 	}
 
-	intPart, fracPart := shortestDecimal(abs)
+	intPart, fracPart := decimal.Shortest(abs)
 
 	// Build the significant-digit string and the exponent of its most
 	// significant digit (power of ten of the first significant digit).
 	var sig string
 	var msdExp int // exponent of the most significant digit
-	ni := normInt(intPart)
+	ni := decimal.NormInt(intPart)
 	if ni != "0" {
 		// value >= 1
 		msdExp = len(ni) - 1
@@ -269,7 +280,7 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 		roundUp := sig[maxSig] >= '5'
 		sig = sig[:maxSig]
 		if roundUp {
-			sig = incrementDigits(sig)
+			sig = decimal.Increment(sig)
 			if len(sig) > maxSig {
 				// carry produced an extra leading digit (e.g. 999->1000);
 				// magnitude grew by one.
@@ -305,15 +316,6 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 
 	resInt = padInt(resInt, minInt)
 	return resInt, resFrac
-}
-
-// splitDot splits a fixed-notation decimal string into integer and fraction
-// parts (without the dot).
-func splitDot(s string) (string, string) {
-	if i := strings.IndexByte(s, '.'); i >= 0 {
-		return s[:i], s[i+1:]
-	}
-	return s, ""
 }
 
 // trimFracTo trims trailing zeros from frac but never below minFr digits.
@@ -598,18 +600,13 @@ func isSymbolOrSpace(r rune) bool {
 }
 
 func firstRune(s string) rune {
-	for _, r := range s {
-		return r
-	}
-	return 0
+	r, _ := utf8.DecodeRuneInString(s)
+	return r
 }
 
 func lastRune(s string) rune {
-	var last rune
-	for _, r := range s {
-		last = r
-	}
-	return last
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r
 }
 
 // applyCurrencyName implements currencyDisplay:"name": it replaces the ¤ marker

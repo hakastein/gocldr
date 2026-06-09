@@ -14,15 +14,6 @@ type formatCtx struct {
 	locale string
 	digits []rune
 	opts   Options
-	// padNumericHour is set when a "numeric" hour should still be padded to two
-	// digits, which ICU does when the requested clock (12/24) is not the
-	// locale's preferred one.
-	padNumericHour bool
-	// zoneNoSecPad mirrors an ICU quirk: a "numeric" hour rendered by a 24-hour
-	// pattern (HH) that also carries a zone field but NO seconds field is kept
-	// padded to two digits (e.g. de "09:07 UTC"), whereas the same request
-	// without the zone — or with seconds — is unpadded ("9:07", "9:07:02 UTC").
-	zoneNoSecPad bool
 	// zoneID is the CLDR (legacy) zone key for the requested IANA time zone,
 	// used to look up metazone / zone-name / territory data. Empty when no zone
 	// was given.
@@ -35,6 +26,22 @@ type formatCtx struct {
 	// saving anywhere in the surrounding year. ICU resolves a LONG generic name
 	// to the zone's standard name when the zone never observes DST.
 	zoneObservesDST bool
+}
+
+// forcePad24 reports the ICU rule that a "numeric" hour is still padded to two
+// digits when the caller forces the locale's non-preferred clock — i.e. requests
+// a 24-hour clock (Hour12 == false) in a locale that prefers 12-hour. The read
+// sites are reached only when an hour field is actually being rendered.
+func (c *formatCtx) forcePad24() bool {
+	return c.opts.Hour12 != nil && !*c.opts.Hour12 && c.localeUses12()
+}
+
+// zoneKeepsHourWidth reports an ICU quirk: a "numeric" hour rendered by a
+// 24-hour pattern that also carries a zone field but NO seconds keeps the
+// matched pattern's two-digit width (e.g. de "09:07 UTC"), whereas the same
+// request without the zone — or with seconds — is unpadded ("9:07", "9:07:02").
+func (c *formatCtx) zoneKeepsHourWidth() bool {
+	return c.opts.Hour == "numeric" && c.opts.TimeZoneName != "" && c.opts.Second == ""
 }
 
 // num formats an integer with the locale's numbering-system digits, zero-padded
@@ -145,8 +152,10 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 		return c.quarter(ch, count, t)
 	case 'z', 'Z', 'O', 'v', 'V', 'X', 'x': // zone
 		return c.zone(ch, count, t)
-	case 'w', 'W': // week of year / month (rarely used here)
+	case 'w': // week of year (ISO approximation; CLDR locale week data is not modelled)
 		return c.num(isoWeek(t), count)
+	case 'W': // week of month
+		return c.num(weekOfMonth(t), count)
 	}
 	// Unknown letter: emit as-is.
 	return strings.Repeat(string(ch), count)
@@ -155,6 +164,15 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 func isoWeek(t time.Time) int {
 	_, w := t.ISOWeek()
 	return w
+}
+
+// weekOfMonth returns the 1-based week number within the month as successive
+// seven-day blocks from the 1st. CLDR's locale-aware week-of-month (which
+// depends on the first day of the week and the minimal-days rule) is not
+// modelled; this field is unreachable through Options and exists only for raw
+// CLDR patterns that contain 'W'.
+func weekOfMonth(t time.Time) int {
+	return (t.Day()-1)/7 + 1
 }
 
 func (c *formatCtx) era(count int, t time.Time) string {

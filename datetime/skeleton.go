@@ -221,10 +221,10 @@ func (c *formatCtx) applyHourCycle(pattern string) string {
 			} else {
 				nl = 'H'
 			}
-			// Pad to two digits when forcing the locale's non-preferred clock
-			// (padNumericHour); ICU keeps the hour padded in that case even though
-			// the source pattern used a single (unpadded) hour letter.
-			if c.padNumericHour && cnt < 2 {
+			// Pad to two digits when forcing the locale's non-preferred clock; ICU
+			// keeps the hour padded in that case even though the source pattern
+			// used a single (unpadded) hour letter.
+			if c.forcePad24() && cnt < 2 {
 				cnt = 2
 			}
 			for k := 0; k < cnt; k++ {
@@ -667,9 +667,9 @@ func (c *formatCtx) adjustWidths(pattern string, want map[rune]skelField) string
 				switch {
 				case wf.count >= 2:
 					newCnt = 2
-				case c.padNumericHour:
+				case c.forcePad24():
 					newCnt = 2
-				case c.zoneNoSecPad && (ch == 'H' || ch == 'k'):
+				case c.zoneKeepsHourWidth() && (ch == 'H' || ch == 'k'):
 					// With a zone field and no seconds, ICU keeps the matched 24-hour
 					// pattern's own hour width rather than unpadding a numeric hour:
 					// de's "HH:mm v" stays "09:07 UTC" while ja's "H:mm v" stays

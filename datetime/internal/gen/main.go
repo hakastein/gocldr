@@ -8,11 +8,11 @@
 //
 //	go generate ./datetime/...
 //
-// The CLDR input location is taken from the CLDR_DATA environment variable
-// (the path to a node_modules tree containing cldr-dates-full, cldr-numbers-full
-// and cldr-core). When CLDR_DATA is unset it falls back to the checked-in
-// .reference copy so host behaviour is unchanged. The -dates/-numbers/-core
-// flags still override the individual derived subdirectories.
+// The CLDR input location is taken from the CLDR_DATA environment variable (the
+// path to a node_modules tree containing cldr-dates-full, cldr-numbers-full and
+// cldr-core), set by the pinned gen image; the generator is fatal if it is
+// unset. The -dates/-numbers/-core flags still override the individual derived
+// subdirectories.
 //
 // The generated file contains, per locale:
 //   - month / day / era / dayPeriod / quarter names (all width variants),
@@ -38,14 +38,9 @@ import (
 	"strconv"
 	"strings"
 	"time"
-)
 
-// defaultCLDRData is the host fallback location of the CLDR node_modules tree,
-// used when the CLDR_DATA environment variable is unset. The pinned Docker
-// toolchain sets CLDR_DATA to its own node_modules path; on the host it stays
-// empty and we use this checked-in .reference copy. Keeping this default means
-// host behaviour is unchanged when CLDR_DATA is not exported.
-const defaultCLDRData = "../../.reference/cldr-data/node_modules"
+	"github.com/hakastein/gocldr/internal/cldr"
+)
 
 func main() {
 	log.SetFlags(0)
@@ -57,12 +52,11 @@ func main() {
 	outPath := flag.String("out", "tables_gen.go", "output Go file")
 	flag.Parse()
 
-	// Base node_modules dir: $CLDR_DATA when set, else the host default. The
-	// three per-package subdirectories are derived from it, but each can still
-	// be overridden individually via its flag.
+	// The per-subdirectory paths derive from $CLDR_DATA (set by the pinned gen
+	// image); each can still be overridden individually via its flag.
 	base := os.Getenv("CLDR_DATA")
 	if base == "" {
-		base = defaultCLDRData
+		log.Fatal("gen: CLDR_DATA is unset; run via `make gen`, never on the host")
 	}
 	if *datesDir == "" {
 		*datesDir = filepath.Join(base, "cldr-dates-full", "main")
@@ -82,7 +76,7 @@ func main() {
 
 	numSys := loadNumberingSystems(filepath.Join(*coreDir, "numberingSystems.json"))
 	parents := loadParentLocales(filepath.Join(*coreDir, "parentLocales.json"))
-	defaultNS := loadDefaultNumberingSystems(*numbersDir)
+	defaultNS, decimalSep := loadNumberFormatInfo(*numbersDir)
 	dpRules := loadDayPeriodRules(filepath.Join(*coreDir, "dayPeriods.json"))
 	zoneMeta := loadMetazoneInfo(filepath.Join(*coreDir, "metaZones.json"))
 	primaryZones := loadPrimaryZones(filepath.Join(*coreDir, "primaryZones.json"))
@@ -113,6 +107,10 @@ func main() {
 		d.NumberingSystem = defaultNS[loc]
 		if d.NumberingSystem == "" {
 			d.NumberingSystem = "latn"
+		}
+		d.DecimalSep = decimalSep[loc]
+		if d.DecimalSep == "" {
+			d.DecimalSep = "."
 		}
 		d.DayPeriodRules = resolveDayPeriodRules(dpRules, loc)
 		d.TerritoryNames = territoryNames[loc]
@@ -286,7 +284,6 @@ type localeData struct {
 	QuartersStd  map[string][]string `json:"qs"`
 	// dayPeriods[width][key] -> value; keys: am, pm, midnight, noon, am-alt, pm-alt, morning1...
 	DayPeriodsFmt map[string]map[string]string `json:"pf"`
-	DayPeriodsStd map[string]map[string]string `json:"ps"`
 	// eras[width][n] where width: names, abbr, narrow; index 0=BC,1=AD (and alt-variants 2,3)
 	Eras map[string][]string `json:"er"`
 
@@ -297,7 +294,8 @@ type localeData struct {
 	Available   map[string]string `json:"avail"` // skeleton -> pattern
 
 	NumberingSystem string            `json:"ns"`
-	Zones           map[string]string `json:"tz"` // "utc.short","utc.long","gmt","gmtZero","hourPos","hourNeg","regionFormat",...
+	DecimalSep      string            `json:"dsep"` // decimal separator of NumberingSystem (fractional seconds)
+	Zones           map[string]string `json:"tz"`   // "utc.short","utc.long","gmt","gmtZero","hourPos","hourNeg","regionFormat",...
 
 	// DayPeriodRules: flexible day-period key -> [fromMinute, beforeMinute].
 	// Exact-point rules (noon/midnight) are stored with from==before.
@@ -323,7 +321,6 @@ func writeLocaleData(buf *bytes.Buffer, d localeData) {
 	writeWidthMap(buf, "QuartersFmt", d.QuartersFmt)
 	writeWidthMap(buf, "QuartersStd", d.QuartersStd)
 	writeStrMapMap(buf, "DayPeriodsFmt", d.DayPeriodsFmt)
-	writeStrMapMap(buf, "DayPeriodsStd", d.DayPeriodsStd)
 	writeWidthMap(buf, "Eras", d.Eras)
 	writeStrMap(buf, "DateFormats", d.DateFormats)
 	writeStrMap(buf, "TimeFormats", d.TimeFormats)
@@ -331,6 +328,7 @@ func writeLocaleData(buf *bytes.Buffer, d localeData) {
 	writeStrMap(buf, "AtTime", d.AtTime)
 	writeStrMap(buf, "Available", d.Available)
 	buf.WriteString(fmt.Sprintf("NumberingSystem: %q, ", d.NumberingSystem))
+	buf.WriteString(fmt.Sprintf("DecimalSep: %q, ", d.DecimalSep))
 	writeStrMap(buf, "Zones", d.Zones)
 	writeRangeMap(buf, "DayPeriodRules", d.DayPeriodRules)
 	writeStrMapMap(buf, "MetazoneNames", d.MetazoneNames)
@@ -486,8 +484,7 @@ type rawNames struct {
 }
 
 type rawDayPeriods struct {
-	Format     map[string]map[string]string `json:"format"`
-	StandAlone map[string]map[string]string `json:"stand-alone"`
+	Format map[string]map[string]string `json:"format"`
 }
 
 type rawDateTime struct {
@@ -546,7 +543,6 @@ func loadLocale(dir, loc string) (localeData, bool) {
 		QuartersFmt:   ordered(g.Quarters.Format, quarterOrder),
 		QuartersStd:   ordered(g.Quarters.StandAlone, quarterOrder),
 		DayPeriodsFmt: dayPeriods(g.DayPeriods.Format),
-		DayPeriodsStd: dayPeriods(g.DayPeriods.StandAlone),
 		Eras:          eras(g.Eras.Names, g.Eras.Abbr, g.Eras.Narrow),
 		DateFormats:   pickStyles(g.DateFormats),
 		TimeFormats:   pickStyles(g.TimeFormats),
@@ -775,6 +771,10 @@ func walkZone(out *zoneData, prefix string, v json.RawMessage) {
 	}
 	var obj map[string]json.RawMessage
 	if err := json.Unmarshal(v, &obj); err != nil {
+		// Not an inner node: CLDR zone trees carry string-valued sibling keys
+		// such as "exemplarCity-alt-secondary" that are neither a leaf we model
+		// nor a descendable object. Skip them. (walkMetazone has no such
+		// siblings, so it treats this as fatal instead.)
 		return
 	}
 	for k, child := range obj {
@@ -1137,35 +1137,17 @@ func loadTerritoryNames(dir string, parents map[string]string, rep map[string]bo
 	return out
 }
 
-// icuNumberingOverrides lists the locales whose default numbering system in
-// ICU/Intl differs from cldr-numbers' defaultNumberingSystem. These were
-// derived by comparing cldr-numbers data against node v22's
-// Intl.DateTimeFormat(...).resolvedOptions().numberingSystem. We match Intl, so
-// these overrides win.
-var icuNumberingOverrides = map[string]string{
-	"ar":         "latn",
-	"az-Arab":    "latn",
-	"az-Arab-IQ": "latn",
-	"az-Arab-TR": "latn",
-	"bgn":        "latn",
-	"bgn-AE":     "latn",
-	"bgn-AF":     "latn",
-	"bgn-IR":     "latn",
-	"bgn-OM":     "latn",
-	"hnj":        "latn",
-	"hnj-Hmnp":   "latn",
-	"mni-Mtei":   "beng",
-	"sat-Deva":   "olck",
-	"sdh":        "latn",
-	"sdh-IQ":     "latn",
-}
-
-func loadDefaultNumberingSystems(dir string) map[string]string {
+// loadNumberFormatInfo returns, per locale, the resolved default numbering
+// system and the decimal separator of that numbering system, both read from
+// cldr-numbers. ICU formats the fractional-second field with this decimal
+// separator (e.g. fr "09:07:05,123", fa with its arabext separator).
+func loadNumberFormatInfo(dir string) (ns, decimal map[string]string) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	out := map[string]string{}
+	ns = map[string]string{}
+	decimal = map[string]string{}
 	for _, e := range ents {
 		if !e.IsDir() {
 			continue
@@ -1173,19 +1155,41 @@ func loadDefaultNumberingSystems(dir string) map[string]string {
 		loc := e.Name()
 		var raw struct {
 			Main map[string]struct {
-				Numbers struct {
-					Default string `json:"defaultNumberingSystem"`
-				} `json:"numbers"`
+				Numbers map[string]json.RawMessage `json:"numbers"`
 			} `json:"main"`
 		}
-		if loadJSON(filepath.Join(dir, loc, "numbers.json"), &raw) {
-			if m, ok := raw.Main[loc]; ok {
-				out[loc] = m.Numbers.Default
-			}
+		if !loadJSON(filepath.Join(dir, loc, "numbers.json"), &raw) {
+			continue
 		}
-		if ov, ok := icuNumberingOverrides[loc]; ok {
-			out[loc] = ov
+		m, ok := raw.Main[loc]
+		if !ok {
+			continue
+		}
+		var def string
+		_ = json.Unmarshal(m.Numbers["defaultNumberingSystem"], &def)
+		if ov, ok := cldr.ICUNumberingOverride[loc]; ok {
+			def = ov
+		}
+		ns[loc] = def
+		decimal[loc] = numberDecimalSep(m.Numbers, def)
+	}
+	return ns, decimal
+}
+
+// numberDecimalSep returns the decimal separator for numbering system nsName,
+// falling back to latn and then ".".
+func numberDecimalSep(numbers map[string]json.RawMessage, nsName string) string {
+	for _, key := range []string{"symbols-numberSystem-" + nsName, "symbols-numberSystem-latn"} {
+		raw, ok := numbers[key]
+		if !ok {
+			continue
+		}
+		var sym struct {
+			Decimal string `json:"decimal"`
+		}
+		if err := json.Unmarshal(raw, &sym); err == nil && sym.Decimal != "" {
+			return sym.Decimal
 		}
 	}
-	return out
+	return "."
 }
