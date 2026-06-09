@@ -76,7 +76,7 @@ func main() {
 
 	numSys := loadNumberingSystems(filepath.Join(*coreDir, "numberingSystems.json"))
 	parents := loadParentLocales(filepath.Join(*coreDir, "parentLocales.json"))
-	defaultNS := loadDefaultNumberingSystems(*numbersDir)
+	defaultNS, decimalSep := loadNumberFormatInfo(*numbersDir)
 	dpRules := loadDayPeriodRules(filepath.Join(*coreDir, "dayPeriods.json"))
 	zoneMeta := loadMetazoneInfo(filepath.Join(*coreDir, "metaZones.json"))
 	primaryZones := loadPrimaryZones(filepath.Join(*coreDir, "primaryZones.json"))
@@ -107,6 +107,10 @@ func main() {
 		d.NumberingSystem = defaultNS[loc]
 		if d.NumberingSystem == "" {
 			d.NumberingSystem = "latn"
+		}
+		d.DecimalSep = decimalSep[loc]
+		if d.DecimalSep == "" {
+			d.DecimalSep = "."
 		}
 		d.DayPeriodRules = resolveDayPeriodRules(dpRules, loc)
 		d.TerritoryNames = territoryNames[loc]
@@ -290,7 +294,8 @@ type localeData struct {
 	Available   map[string]string `json:"avail"` // skeleton -> pattern
 
 	NumberingSystem string            `json:"ns"`
-	Zones           map[string]string `json:"tz"` // "utc.short","utc.long","gmt","gmtZero","hourPos","hourNeg","regionFormat",...
+	DecimalSep      string            `json:"dsep"` // decimal separator of NumberingSystem (fractional seconds)
+	Zones           map[string]string `json:"tz"`   // "utc.short","utc.long","gmt","gmtZero","hourPos","hourNeg","regionFormat",...
 
 	// DayPeriodRules: flexible day-period key -> [fromMinute, beforeMinute].
 	// Exact-point rules (noon/midnight) are stored with from==before.
@@ -323,6 +328,7 @@ func writeLocaleData(buf *bytes.Buffer, d localeData) {
 	writeStrMap(buf, "AtTime", d.AtTime)
 	writeStrMap(buf, "Available", d.Available)
 	buf.WriteString(fmt.Sprintf("NumberingSystem: %q, ", d.NumberingSystem))
+	buf.WriteString(fmt.Sprintf("DecimalSep: %q, ", d.DecimalSep))
 	writeStrMap(buf, "Zones", d.Zones)
 	writeRangeMap(buf, "DayPeriodRules", d.DayPeriodRules)
 	writeStrMapMap(buf, "MetazoneNames", d.MetazoneNames)
@@ -1131,12 +1137,17 @@ func loadTerritoryNames(dir string, parents map[string]string, rep map[string]bo
 	return out
 }
 
-func loadDefaultNumberingSystems(dir string) map[string]string {
+// loadNumberFormatInfo returns, per locale, the resolved default numbering
+// system and the decimal separator of that numbering system, both read from
+// cldr-numbers. ICU formats the fractional-second field with this decimal
+// separator (e.g. fr "09:07:05,123", fa with its arabext separator).
+func loadNumberFormatInfo(dir string) (ns, decimal map[string]string) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	out := map[string]string{}
+	ns = map[string]string{}
+	decimal = map[string]string{}
 	for _, e := range ents {
 		if !e.IsDir() {
 			continue
@@ -1144,19 +1155,41 @@ func loadDefaultNumberingSystems(dir string) map[string]string {
 		loc := e.Name()
 		var raw struct {
 			Main map[string]struct {
-				Numbers struct {
-					Default string `json:"defaultNumberingSystem"`
-				} `json:"numbers"`
+				Numbers map[string]json.RawMessage `json:"numbers"`
 			} `json:"main"`
 		}
-		if loadJSON(filepath.Join(dir, loc, "numbers.json"), &raw) {
-			if m, ok := raw.Main[loc]; ok {
-				out[loc] = m.Numbers.Default
-			}
+		if !loadJSON(filepath.Join(dir, loc, "numbers.json"), &raw) {
+			continue
 		}
+		m, ok := raw.Main[loc]
+		if !ok {
+			continue
+		}
+		var def string
+		_ = json.Unmarshal(m.Numbers["defaultNumberingSystem"], &def)
 		if ov, ok := cldr.ICUNumberingOverride[loc]; ok {
-			out[loc] = ov
+			def = ov
+		}
+		ns[loc] = def
+		decimal[loc] = numberDecimalSep(m.Numbers, def)
+	}
+	return ns, decimal
+}
+
+// numberDecimalSep returns the decimal separator for numbering system nsName,
+// falling back to latn and then ".".
+func numberDecimalSep(numbers map[string]json.RawMessage, nsName string) string {
+	for _, key := range []string{"symbols-numberSystem-" + nsName, "symbols-numberSystem-latn"} {
+		raw, ok := numbers[key]
+		if !ok {
+			continue
+		}
+		var sym struct {
+			Decimal string `json:"decimal"`
+		}
+		if err := json.Unmarshal(raw, &sym); err == nil && sym.Decimal != "" {
+			return sym.Decimal
 		}
 	}
-	return out
+	return "."
 }

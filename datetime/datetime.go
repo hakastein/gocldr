@@ -196,18 +196,17 @@ func (c *formatCtx) resolvePattern() string {
 	// adjustFieldTypes by injecting the fractional-second field adjacent to the
 	// seconds field after matching.
 	if o.FractionalSecondDigits != nil && *o.FractionalSecondDigits > 0 {
-		pat = injectFractionalSecond(pat, *o.FractionalSecondDigits)
+		pat = c.injectFractionalSecond(pat, *o.FractionalSecondDigits)
 	}
 	return pat
 }
 
-// injectFractionalSecond places a decimal separator and an S-run immediately
-// after the seconds field of pattern, matching ICU's adjustFieldTypes. The "."
-// literal is the CLDR convention; ICU substitutes the locale decimal separator
-// at format time. We do not have the decimal-separator table here, so locales
-// whose decimal separator is not "." (e.g. fr uses ",") are not yet exact.
-// TODO: thread the locale decimal separator (from cldr/number) through to here.
-func injectFractionalSecond(pattern string, digits int) string {
+// injectFractionalSecond places the locale's decimal separator and an S-run
+// immediately after the seconds field of pattern, matching ICU's
+// adjustFieldTypes (which uses the number decimal separator, e.g. fr ","). The
+// separator is emitted as a pattern literal; CLDR decimal separators are
+// punctuation, so they pass through interpret unquoted.
+func (c *formatCtx) injectFractionalSecond(pattern string, digits int) string {
 	runes := []rune(pattern)
 	n := len(runes)
 	inQuote := false
@@ -231,7 +230,11 @@ func injectFractionalSecond(pattern string, digits int) string {
 	if end < 0 {
 		return pattern
 	}
-	frac := "." + strings.Repeat("S", digits)
+	sep := c.ld.DecimalSep
+	if sep == "" {
+		sep = "."
+	}
+	frac := sep + strings.Repeat("S", digits)
 	return string(runes[:end]) + frac + string(runes[end:])
 }
 

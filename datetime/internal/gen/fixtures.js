@@ -56,6 +56,8 @@ const comp = [
   ["comp:hms", { hour: "numeric", minute: "2-digit", second: "2-digit" }],
   ["comp:hm-12", { hour: "numeric", minute: "2-digit", hour12: true }],
   ["comp:hm-24", { hour: "numeric", minute: "2-digit", hour12: false }],
+  ["comp:hmsf3", { hour: "numeric", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 }],
+  ["comp:hmsf1", { hour: "numeric", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 1 }],
   ["comp:hms-tzshort", { hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "short" }],
   ["comp:hms-tzlong", { hour: "numeric", minute: "2-digit", second: "2-digit", timeZoneName: "long" }],
   ["comp:era", { era: "short", year: "numeric", month: "short", day: "numeric" }],

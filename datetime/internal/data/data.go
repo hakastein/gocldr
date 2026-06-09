@@ -29,7 +29,11 @@ type LocaleData struct {
 	Available   map[string]string
 
 	NumberingSystem string
-	Zones           map[string]string
+	// DecimalSep is the decimal separator of NumberingSystem, used for the
+	// fractional-second field (ICU formats it with the locale's number decimal
+	// separator, e.g. fr "09:07:05,123").
+	DecimalSep string
+	Zones      map[string]string
 
 	// DayPeriodRules maps a flexible day-period key (morning1, afternoon1,
 	// evening1, night1, noon, midnight) to its time range. For a half-open
