@@ -1,0 +1,44 @@
+name: Bug report
+description: Report a defect in gocldr
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a report. Please search existing issues first, and
+        include a minimal reproduction — it is by far the most useful thing you
+        can provide.
+  - type: textarea
+    id: summary
+    attributes:
+      label: What happened?
+      description: A clear description of the bug, including what you expected to happen instead.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: The smallest FTL source and Go snippet that reproduces the problem.
+      render: go
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: gocldr version or commit
+    validations:
+      required: true
+  - type: input
+    id: goversion
+    attributes:
+      label: Go version (output of `go version`)
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Locale, relevant options (e.g. WithUseIsolating), or other context.
+    validations:
+      required: false
