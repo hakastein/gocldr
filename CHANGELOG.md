@@ -9,8 +9,7 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 ### Added
 
 - Initial standalone module: the `datetime`, `number`, and `plural` CLDR
-  formatters extracted verbatim from gofluent, plus the pinned CLDR generation
-  toolchain.
+  formatters and the pinned CLDR generation toolchain.
 - Locale data is now modular: each locale's `datetime` and `number` data lives
   in its own per-locale package and is opt-in via a blank import of
   `gocldr/locales/<tag>` (both domains for one locale), the per-domain

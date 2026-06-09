@@ -1,13 +1,6 @@
 gocldr
 Copyright 2026 hakastein
 
-This product includes software ported from Project Fluent's reference
-JavaScript implementation, fluent.js (https://github.com/projectfluent/fluent.js):
-the @fluent/syntax parser and serializer, the @fluent/bundle runtime and
-resolver, and @fluent/langneg. fluent.js is copyright the Mozilla Foundation and
-the Project Fluent contributors and is licensed under the Apache License,
-Version 2.0.
-
 The locale-formatting tables under cldr/ are generated from the Unicode Common
 Locale Data Repository (CLDR), copyright Unicode, Inc., distributed under the
 Unicode License Agreement (https://www.unicode.org/license.txt). The generated

@@ -5,10 +5,8 @@ CLDR plural rules — a standalone port of the relevant `Intl.*` behavior,
 generated directly from the Unicode CLDR data. Zero runtime dependencies
 (testify is test-only).
 
-`gocldr` was extracted from [gofluent](https://github.com/hakastein/gofluent),
-which now consumes it. It is useful on its own to anyone who wants
-`Intl.NumberFormat` / `Intl.DateTimeFormat` / `Intl.PluralRules`-style
-formatting in Go without pulling in a localization framework.
+It is useful to anyone who wants `Intl.NumberFormat` / `Intl.DateTimeFormat` /
+`Intl.PluralRules`-style formatting in Go.
 
 ## Packages
 
@@ -18,7 +16,7 @@ formatting in Go without pulling in a localization framework.
 
 ## Correctness
 
-Behavior follows the reference implementation (fluent.js / `Intl.*`). The number
+Behavior matches ECMA-402 `Intl.*`. The number
 and datetime formatters are checked against Node `Intl.*` golden fixtures, and
 the plural rules against the CLDR sample data, all via `go test ./...`. The CLDR
 tables are generated; never hand-edit `tables_gen.go` or `testdata/`.

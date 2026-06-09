@@ -14,7 +14,7 @@ the standard docs first:
 - **Provenance is stated, not hidden.** This codebase is LLM-generated. The guard
   is verification: the formatters are checked against Node `Intl.*` golden fixtures
   and CLDR sample data via `go test ./...`. Trust the tests over the prose.
-- **Match fluent.js / `Intl.*`.** Behavior follows the reference implementation.
+- **Match ECMA-402 `Intl.*`.** Behavior matches the ECMA-402 `Intl.*` spec.
   When changing formatting, regenerate fixtures with `make gen` rather than
   hand-editing expected values.
 - **Never run the generators on the host.** Use `make gen` (pinned Docker

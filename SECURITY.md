@@ -25,15 +25,12 @@ ready we will coordinate disclosure and credit reporters who wish to be named.
 
 ## Threat model
 
-gocldr is a localization library. The classes of issue we consider in scope:
+gocldr is a CLDR formatting library. The classes of issue we consider in scope:
 
-- Inputs that cause excessive CPU or memory use. The resolver bounds placeable
-  expansion with `MaxPlaceables` to mitigate Billion-Laughs / quadratic-blowup
-  style attacks.
-- Panics on input. With an error sink supplied, the resolver is designed to be
-  fault-tolerant and must not panic; a reproducible panic is a bug we want to
-  hear about.
+- Inputs that cause excessive CPU or memory use (e.g. pathological locale tags or
+  number values that trigger quadratic behavior).
+- Panics on input. The formatters are designed to degrade gracefully and must not
+  panic; a reproducible panic is a bug we want to hear about.
 
-Translations and FTL resources are treated as **trusted input** authored by the
-application. Rendering FTL supplied by untrusted third parties is outside the
-intended threat model.
+Locale data is compiled from Unicode CLDR and treated as **trusted input**. User-
+supplied locale tags and numeric/date values are the untrusted surface.
