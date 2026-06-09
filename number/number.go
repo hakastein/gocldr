@@ -13,6 +13,7 @@ import (
 	"math"
 	"strings"
 	"unicode"
+	"unicode/utf8"
 
 	"github.com/hakastein/gocldr/number/internal/data"
 )
@@ -222,15 +223,11 @@ func formatMagnitude(abs float64, rs roundSpec) (string, string) {
 }
 
 // formatSignificant formats abs with the given significant-digit constraints,
-// matching Intl's behaviour: round to maxSig significant digits (half-expand),
-// then show between minSig and maxSig significant digits (trailing zeros beyond
-// minSig are trimmed, those needed to reach minSig are kept and are
-// significant).
-//
-// The implementation works on the canonical significant-digit string s (no
-// leading zeros) and a base-10 exponent so that the value equals
-// s * 10^(exp - (len(s)-1)), then rounds at the maxSig boundary and places the
-// decimal point.
+// matching Intl: round to maxSig significant digits (half-expand), then show
+// between minSig and maxSig significant digits (trailing zeros beyond minSig are
+// trimmed; those needed to reach minSig are kept and significant). It operates
+// on the significant-digit string plus the exponent of its most significant
+// digit, rounds at the maxSig boundary, then places the decimal point.
 func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string) {
 	if abs == 0 {
 		intPart := "0"
@@ -598,18 +595,13 @@ func isSymbolOrSpace(r rune) bool {
 }
 
 func firstRune(s string) rune {
-	for _, r := range s {
-		return r
-	}
-	return 0
+	r, _ := utf8.DecodeRuneInString(s)
+	return r
 }
 
 func lastRune(s string) rune {
-	var last rune
-	for _, r := range s {
-		last = r
-	}
-	return last
+	r, _ := utf8.DecodeLastRuneInString(s)
+	return r
 }
 
 // applyCurrencyName implements currencyDisplay:"name": it replaces the ¤ marker

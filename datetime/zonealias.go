@@ -33,8 +33,6 @@ var zoneCanonicalToCLDR = map[string]string{
 	"Pacific/Chuuk":                  "Pacific/Truk",
 	"Pacific/Pohnpei":                "Pacific/Ponape",
 	"America/Atikokan":               "America/Coral_Harbour",
-	"Asia/Qostanay":                  "Asia/Qostanay",
-	"Australia/Currie":               "Australia/Currie",
 }
 
 // cldrZoneID returns the CLDR (legacy) zone key for a canonical IANA id,

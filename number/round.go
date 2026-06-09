@@ -5,15 +5,10 @@ import (
 	"strings"
 )
 
-// decimal is a sign-less decimal value represented as a digit string plus the
-// position of the decimal point. digits holds all significant digits (no
-// leading zeros except a single "0" for zero); exp is the power of ten of the
-// last digit. The value is digits * 10^exp interpreted with the point implied.
-//
-// We work on the shortest round-tripping decimal representation of the float64
-// (what JavaScript's Number->string yields, and what Intl rounds), so that
-// rounding decisions match Intl.NumberFormat, which rounds the Number's
-// shortest decimal, not its full binary expansion.
+// Rounding operates on the shortest round-tripping decimal representation of the
+// float64 (what JavaScript's Number->string yields), so that rounding decisions
+// match Intl.NumberFormat — which rounds the Number's shortest decimal, not its
+// full binary expansion.
 
 // shortestDecimal returns the integer-digit and fraction-digit strings of abs
 // using the shortest representation that round-trips through float64.
@@ -57,9 +52,8 @@ func roundDigits(intPart, fracPart string, keepFrac int) (string, string) {
 	if keepFrac == 0 {
 		return normInt(combined), ""
 	}
-	if len(combined) < keepFrac {
-		combined = strings.Repeat("0", keepFrac-len(combined)) + combined
-	}
+	// combined is intPart (>=1 digit) plus exactly keepFrac kept digits, so it
+	// always has more than keepFrac digits even after a carry grows it by one.
 	newInt := combined[:len(combined)-keepFrac]
 	newFrac := combined[len(combined)-keepFrac:]
 	return normInt(newInt), newFrac

@@ -47,7 +47,7 @@ const (
 //	W: the number of visible fraction digits, without trailing zeros.
 //	F: the visible fraction digits, with trailing zeros, as an integer.
 //	T: the visible fraction digits, without trailing zeros, as an integer.
-//	C: the compact decimal exponent value (also exposed as operand e).
+//	C: the compact/scientific exponent value (UTS #35 operand c, also named e).
 type Operands struct {
 	N float64
 	I int64
@@ -141,7 +141,11 @@ func NewOperands(n float64, minFrac, maxFrac int) Operands {
 	}
 	ops, err := OperandsFromString(s)
 	if err != nil {
-		// Should not happen for a value produced by FormatFloat.
+		// The freshly built decimal string can only fail to parse when its
+		// integer or fraction part exceeds int64 (|n| >= 2^63). Operands I/F
+		// cannot represent such a magnitude; N still drives rule selection and
+		// every locale categorises numbers that large as "other", so fall back
+		// to N alone.
 		return Operands{N: abs}
 	}
 	return ops
@@ -251,9 +255,10 @@ func trimToMinFrac(s string, minFrac int) string {
 //
 // The accepted syntax is an optional leading '-' (or '+'), one or more integer
 // digits, an optional '.' with one or more fraction digits, and an optional
-// compact exponent suffix 'c' or 'e' followed by an integer (e.g. "1.5",
-// "1000000", "1.2c6"). The compact exponent populates operand C and does not
-// otherwise scale the value, matching the CLDR sample syntax.
+// exponent suffix 'c' or 'e' followed by a signed integer (e.g. "1.5",
+// "1000000", "1.2c6"). The exponent scales the value by shifting the decimal
+// point and is also reported as operand C, per UTS #35 (so "1.2c6" yields
+// N=1200000, C=6).
 func OperandsFromString(s string) (Operands, error) {
 	if s == "" {
 		return Operands{}, errors.New("plural: empty number string")
@@ -287,24 +292,11 @@ func OperandsFromString(s string) (Operands, error) {
 		return Operands{}, errors.New("plural: invalid number string " + strconv.Quote(s))
 	}
 
-	// Apply the compact exponent by shifting the decimal point right by
-	// `compact` places, as required by UTS #35 (the operands i/v/f/t/n are
-	// computed from the scaled value while operand c retains the exponent).
-	if compact > 0 {
-		shift := compact
-		for shift > 0 && fracPart != "" {
-			intPart += fracPart[:1]
-			fracPart = fracPart[1:]
-			shift--
-		}
-		if shift > 0 {
-			intPart += strings.Repeat("0", shift)
-		}
-		intPart = strings.TrimLeft(intPart, "0")
-		if intPart == "" {
-			intPart = "0"
-		}
-	}
+	// Apply the exponent by shifting the decimal point, as required by UTS #35:
+	// the operands i/v/f/t/n are computed from the scaled value while operand
+	// c/e retains the exponent. Compact decimals use a positive exponent;
+	// scientific notation may use a negative one.
+	intPart, fracPart = shiftPoint(intPart, fracPart, compact)
 
 	var ops Operands
 	// I: integer value of the integer digits.
@@ -324,7 +316,8 @@ func OperandsFromString(s string) (Operands, error) {
 		ops.F = f64
 	}
 
-	// W/T strip trailing zeros from the fraction digits.
+	// W/T strip trailing zeros from the fraction digits. trimmed is a prefix of
+	// fracPart, which already parsed into F above, so it cannot overflow here.
 	trimmed := strings.TrimRight(fracPart, "0")
 	ops.W = len(trimmed)
 	if trimmed != "" {
@@ -356,6 +349,37 @@ func allDigits(s string) bool {
 		}
 	}
 	return true
+}
+
+// shiftPoint moves the decimal point of intPart.fracPart by `by` places — right
+// when positive, left when negative — as applying an exponent of `by` requires,
+// and returns the normalised integer and fraction digit strings.
+func shiftPoint(intPart, fracPart string, by int) (string, string) {
+	switch {
+	case by > 0:
+		for by > 0 && fracPart != "" {
+			intPart += fracPart[:1]
+			fracPart = fracPart[1:]
+			by--
+		}
+		if by > 0 {
+			intPart += strings.Repeat("0", by)
+		}
+	case by < 0:
+		for by < 0 && intPart != "" {
+			fracPart = intPart[len(intPart)-1:] + fracPart
+			intPart = intPart[:len(intPart)-1]
+			by++
+		}
+		if by < 0 {
+			fracPart = strings.Repeat("0", -by) + fracPart
+		}
+	}
+	intPart = strings.TrimLeft(intPart, "0")
+	if intPart == "" {
+		intPart = "0"
+	}
+	return intPart, fracPart
 }
 
 // canonicalLocale normalises a BCP-47 / CLDR locale tag for table lookup: it
