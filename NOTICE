@@ -1,7 +1,9 @@
 gocldr
 Copyright 2026 hakastein
 
-The locale-formatting tables under cldr/ are generated from the Unicode Common
-Locale Data Repository (CLDR), copyright Unicode, Inc., distributed under the
-Unicode License Agreement (https://www.unicode.org/license.txt). The generated
-output is validated against ECMA-402 Intl behavior.
+The locale-formatting tables bundled in this module -- the generated *_gen.go
+files under datetime/, number/, plural/, and the locales/ packages -- are derived
+from the Unicode Common Locale Data Repository (CLDR), copyright Unicode, Inc.,
+distributed under the Unicode License Agreement
+(https://www.unicode.org/license.txt). The generated output is validated against
+ECMA-402 Intl behavior.

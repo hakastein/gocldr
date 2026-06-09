@@ -1,6 +1,6 @@
 # Pinned, hermetic CLDR generation toolchain for gocldr.
 #
-# Why this exists: the generated cldr/* tables and the golden Intl fixtures must
+# Why this exists: the generated CLDR tables and the golden Intl fixtures must
 # describe the SAME CLDR release. The host's Node bundles whatever ICU/CLDR it was
 # built with (e.g. Node 22.15 -> ICU 76 -> CLDR 46), which is not something we can
 # rely on. So we pin BOTH knobs here:
@@ -10,7 +10,9 @@
 # construction — no host Node involved.
 FROM node:22.15.0-bookworm@sha256:a1f1274dadd49738bcd4cf552af43354bb781a7e9e3bc984cfeedc55aba2ddd8
 
-# Go toolchain (matches the module's go directive).
+# Go toolchain for running the generators. Pinned to a current release for
+# reproducibility; it only needs to be >= the go.mod floor (the module targets
+# Go 1.23+), not an exact match.
 ARG GO_VERSION=1.26.0
 RUN curl -fsSL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /usr/local -xz
 ENV PATH="/usr/local/go/bin:${PATH}" \

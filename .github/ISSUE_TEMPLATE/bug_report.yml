@@ -19,7 +19,7 @@ body:
     id: repro
     attributes:
       label: Minimal reproduction
-      description: The smallest FTL source and Go snippet that reproduces the problem.
+      description: The smallest self-contained Go snippet that reproduces the problem (locale, the input value or time, and the options you passed).
       render: go
     validations:
       required: true
@@ -39,6 +39,6 @@ body:
     id: context
     attributes:
       label: Anything else?
-      description: Locale, relevant options (e.g. WithUseIsolating), or other context.
+      description: Expected vs. actual output, the options you passed (number.Options / datetime.Options fields), the equivalent Intl.* call, or any other context.
     validations:
       required: false
