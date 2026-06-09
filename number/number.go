@@ -15,6 +15,7 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	"github.com/hakastein/gocldr/internal/decimal"
 	"github.com/hakastein/gocldr/number/internal/data"
 )
 
@@ -225,7 +226,7 @@ func formatMagnitude(abs float64, rs roundSpec) (string, string) {
 	}
 
 	// Round to maxFr fraction digits, half away from zero.
-	intPart, fracPart := roundFixed(abs, rs.maxFr)
+	intPart, fracPart := decimal.RoundFixed(abs, rs.maxFr)
 
 	// Trim trailing zeros down to minFr.
 	fracPart = trimFracTo(fracPart, rs.minFr)
@@ -254,13 +255,13 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 		return intPart, strings.Repeat("0", fracDigits)
 	}
 
-	intPart, fracPart := shortestDecimal(abs)
+	intPart, fracPart := decimal.Shortest(abs)
 
 	// Build the significant-digit string and the exponent of its most
 	// significant digit (power of ten of the first significant digit).
 	var sig string
 	var msdExp int // exponent of the most significant digit
-	ni := normInt(intPart)
+	ni := decimal.NormInt(intPart)
 	if ni != "0" {
 		// value >= 1
 		msdExp = len(ni) - 1
@@ -279,7 +280,7 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 		roundUp := sig[maxSig] >= '5'
 		sig = sig[:maxSig]
 		if roundUp {
-			sig = incrementDigits(sig)
+			sig = decimal.Increment(sig)
 			if len(sig) > maxSig {
 				// carry produced an extra leading digit (e.g. 999->1000);
 				// magnitude grew by one.
@@ -315,15 +316,6 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 
 	resInt = padInt(resInt, minInt)
 	return resInt, resFrac
-}
-
-// splitDot splits a fixed-notation decimal string into integer and fraction
-// parts (without the dot).
-func splitDot(s string) (string, string) {
-	if i := strings.IndexByte(s, '.'); i >= 0 {
-		return s[:i], s[i+1:]
-	}
-	return s, ""
 }
 
 // trimFracTo trims trailing zeros from frac but never below minFr digits.

@@ -17,6 +17,8 @@ import (
 	"math"
 	"strconv"
 	"strings"
+
+	"github.com/hakastein/gocldr/internal/decimal"
 )
 
 // CLDR input paths come from $CLDR_DATA (set by the pinned gen image), falling
@@ -126,14 +128,10 @@ func NewOperands(n float64, minFrac, maxFrac int) Operands {
 	if math.IsInf(abs, 0) || math.IsNaN(abs) {
 		return Operands{N: abs}
 	}
-	// Round to maxFrac fraction digits using half-away-from-zero (ECMA-402's
-	// halfExpand, which is ICU's and Intl.NumberFormat's default — NOT Go's
-	// half-to-even). The rounding operates on the shortest round-tripping
-	// decimal string (the same one Intl rounds), via integer/string math, so it
-	// agrees with cldr/number's roundFixed and never suffers float multiply
-	// error (e.g. 8.575 -> 8.58, not the 8.57 that abs*100 or FormatFloat 'f'
-	// would yield). Trailing zeros are then trimmed down to minFrac to obtain
-	// the canonical visible representation.
+	// Round to maxFrac fraction digits half-away-from-zero on the shortest
+	// round-tripping decimal (ECMA-402's halfExpand; shared with the number
+	// formatter via internal/decimal), then trim trailing zeros down to minFrac
+	// for the canonical visible representation.
 	s := roundHalfAway(abs, maxFrac)
 	s = trimToMinFrac(s, minFrac)
 	if neg {
@@ -152,76 +150,14 @@ func NewOperands(n float64, minFrac, maxFrac int) Operands {
 }
 
 // roundHalfAway rounds the non-negative value abs to exactly maxFrac fraction
-// digits using half-away-from-zero, returning a fixed-notation decimal string
-// with exactly maxFrac fraction digits (callers trim to minFrac afterwards). It
-// works on the shortest round-tripping decimal string of abs and rounds via
-// integer/string math, mirroring cldr/number's roundFixed so the plural
-// operands always match the displayed number.
+// digits (half-away-from-zero) and returns the fixed-notation decimal string;
+// callers trim trailing zeros down to minFrac afterwards.
 func roundHalfAway(abs float64, maxFrac int) string {
-	s := strconv.FormatFloat(abs, 'f', -1, 64)
-	intPart, fracPart := splitDecimal(s)
-
-	if len(fracPart) <= maxFrac {
-		// Already short enough; pad with zeros to reach maxFrac.
-		if maxFrac == 0 {
-			return intPart
-		}
-		fracPart += strings.Repeat("0", maxFrac-len(fracPart))
-		return intPart + "." + fracPart
+	intPart, fracPart := decimal.RoundFixed(abs, maxFrac)
+	if fracPart == "" {
+		return intPart
 	}
-
-	// Drop the digits beyond maxFrac, rounding up on the first dropped digit
-	// (>= '5' rounds away from zero).
-	kept := fracPart[:maxFrac]
-	roundUp := fracPart[maxFrac] >= '5'
-	combined := intPart + kept
-	if roundUp {
-		combined = incrementDigits(combined)
-	}
-	if maxFrac == 0 {
-		return normInt(combined)
-	}
-	if len(combined) < maxFrac {
-		combined = strings.Repeat("0", maxFrac-len(combined)) + combined
-	}
-	newInt := normInt(combined[:len(combined)-maxFrac])
-	newFrac := combined[len(combined)-maxFrac:]
-	return newInt + "." + newFrac
-}
-
-// splitDecimal splits a fixed-notation decimal string into integer and fraction
-// digit parts (without the dot). A missing fraction yields "".
-func splitDecimal(s string) (intPart, fracPart string) {
-	if dot := strings.IndexByte(s, '.'); dot >= 0 {
-		return s[:dot], s[dot+1:]
-	}
-	return s, ""
-}
-
-// incrementDigits adds 1 to a pure digit string, growing it on carry.
-func incrementDigits(d string) string {
-	b := []byte(d)
-	if len(b) == 0 {
-		return "1"
-	}
-	for i := len(b) - 1; i >= 0; i-- {
-		if b[i] < '9' {
-			b[i]++
-			return string(b)
-		}
-		b[i] = '0'
-	}
-	return "1" + string(b)
-}
-
-// normInt strips leading zeros from an integer digit string, leaving at least
-// one digit.
-func normInt(s string) string {
-	s = strings.TrimLeft(s, "0")
-	if s == "" {
-		return "0"
-	}
-	return s
+	return intPart + "." + fracPart
 }
 
 // trimToMinFrac removes trailing fractional zeros from a decimal string until
