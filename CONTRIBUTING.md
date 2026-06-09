@@ -2,7 +2,7 @@
 
 ## Requirements
 
-- Go **1.26** or newer (drops to 1.23 after locale-data modularization).
+- Go **1.23** or newer.
 - Docker (only for regenerating CLDR tables/fixtures).
 
 ## Build & test

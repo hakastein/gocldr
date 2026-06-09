@@ -22,7 +22,7 @@ jobs:
       fail-fast: false
       matrix:
         # Floor version from go.mod and the latest stable release.
-        go: ['1.26', 'stable']
+        go: ['1.23', 'stable']
     steps:
       - uses: actions/checkout@v4
 

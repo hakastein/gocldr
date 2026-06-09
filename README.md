@@ -25,8 +25,7 @@ tables are generated; never hand-edit `tables_gen.go` or `testdata/`.
 
 ## Requirements
 
-Go 1.26 or newer. (This requirement drops to 1.23 once the locale data is
-modularized — tracked separately.)
+Go 1.23 or newer.
 
 ## Status
 

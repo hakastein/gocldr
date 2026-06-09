@@ -16,6 +16,11 @@ echo "==> go $(go version)"
 echo "==> go generate ./..."
 go generate ./...
 
+# Refresh the cross-domain locale umbrellas (locales/<tag>, locales/all) so they
+# track the per-domain locale sets just regenerated above. Reads no CLDR data.
+echo "==> go run ./internal/gen (cross-domain umbrellas)"
+go run ./internal/gen
+
 echo "==> go test ./..."
 go test ./...
 
