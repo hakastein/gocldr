@@ -73,3 +73,24 @@ jobs:
         uses: golang/govulncheck-action@v1
         with:
           go-version-input: stable
+
+  generate:
+    name: generated files are current
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Rebuild every CLDR table and Intl golden fixture from the pinned data
+      # (gen/Dockerfile + gen/package.json) and fail if the committed output
+      # drifted. This is the only guard that the generated files still match the
+      # data they claim to come from.
+      - name: regenerate
+        run: make gen
+
+      - name: verify no drift
+        run: |
+          if ! git diff --quiet; then
+            echo "Generated files are out of date. Run 'make gen' and commit the result:"
+            git diff --stat
+            exit 1
+          fi
