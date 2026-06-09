@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 
 	"github.com/hakastein/gocldr/number"
+	_ "github.com/hakastein/gocldr/number/locales/all"
 )
 
 func ptrInt(i int) *int    { return &i }

@@ -1,34 +1,14 @@
 package number
 
-import "strings"
+import (
+	"strings"
 
-// symbols holds the locale's number symbols actually used by the formatter.
-type symbols struct {
-	decimal  string
-	group    string
-	minus    string
-	percent  string
-	plus     string
-	nan      string
-	infinity string
-}
+	"github.com/hakastein/gocldr/number/internal/data"
+)
 
-// localeData is the fully-resolved data for one locale, assembled from the
-// compact generated tables.
-type localeData struct {
-	locale        string
-	sym           symbols
-	decimal       string // standard decimal pattern
-	percent       string // standard percent pattern
-	currency      string // standard currency pattern
-	minGrouping   int
-	digits        string // numbering-system digit glyphs ("" => latn/ASCII)
-	spacingBefore string
-	spacingAfter  string
-	unitPatterns  map[string]string // currency unitPattern-count-* for name display
-}
-
-// currencyInfo holds the resolved currency display data.
+// currencyInfo holds the resolved currency display data returned by
+// resolveCurrency. It is an internal helper shape sourced from the registry's
+// fully-resolved per-locale Currencies map.
 type currencyInfo struct {
 	code   string
 	symbol string
@@ -37,41 +17,30 @@ type currencyInfo struct {
 	names  map[string]string // plural-count display names
 }
 
-// resolveLocale builds a localeData for the requested locale, following the
-// CLDR fallback chain: exact -> parentLocale -> truncated subtags -> root.
-func resolveLocale(locale string) *localeData {
-	key := lookupLocaleKey(locale)
-	e := localeTable[key]
-
-	ld := &localeData{
-		locale:       locale,
-		minGrouping:  int(e.minGrouping),
-		unitPatterns: map[string]string{},
-	}
-	ld.sym = symbols(symbolSets[e.symSet])
-	ld.decimal = patternTable[e.decimalPat]
-	ld.percent = patternTable[e.percentPat]
-	ld.currency = patternTable[e.currencyPat]
-	ld.spacingBefore = e.spacingBefore
-	ld.spacingAfter = e.spacingAfter
-	if e.digitSys != "" {
-		ld.digits = numberingSystems[e.digitSys]
-	}
-	for k, v := range e.unitPatterns {
-		ld.unitPatterns[k] = v
-	}
-	return ld
+// rootData is the built-in CLDR-root fallback used when nothing in a locale's
+// fallback chain is registered. It keeps Format from producing empty output for
+// an unknown locale (degrading to plain ASCII grouped decimals instead).
+var rootData = &data.LocaleData{
+	Sym:          data.Symbols{Decimal: ".", Group: ",", Minus: "-", Percent: "%", Plus: "+", NaN: "NaN", Infinity: "∞"},
+	Decimal:      "#,##0.###",
+	Percent:      "#,##0%",
+	Currency:     "¤#,##0.00",
+	MinGrouping:  1,
+	UnitPatterns: map[string]string{},
+	Currencies:   map[string]data.CurrencyDisplay{},
 }
 
-// lookupLocaleKey resolves a locale string to a key present in localeTable,
-// applying the CLDR fallback chain.
-func lookupLocaleKey(locale string) string {
+// resolveLocale returns the registered data for the requested locale, following
+// the CLDR fallback chain: exact -> parentLocale -> truncated subtags -> root.
+// On a total miss (nothing in the chain registered) it returns rootData so
+// output is never empty.
+func resolveLocale(locale string) *data.LocaleData {
 	loc := canonicalLocaleTag(locale)
 	seen := map[string]bool{}
 	for loc != "" && !seen[loc] {
 		seen[loc] = true
-		if _, ok := localeTable[loc]; ok {
-			return loc
+		if d, ok := data.Lookup(loc); ok {
+			return d
 		}
 		// parentLocale override.
 		if p, ok := parentLocales[loc]; ok {
@@ -85,10 +54,10 @@ func lookupLocaleKey(locale string) string {
 		}
 		break
 	}
-	if _, ok := localeTable["root"]; ok {
-		return "root"
+	if d, ok := data.Lookup("root"); ok {
+		return d
 	}
-	return "en"
+	return rootData
 }
 
 // canonicalLocaleTag normalises a BCP-47 / CLDR tag for table lookup.
@@ -110,39 +79,21 @@ func canonicalLocaleTag(loc string) string {
 	return strings.Join(parts, "-")
 }
 
-// resolveCurrency builds currencyInfo for the given ISO code in the locale.
-func resolveCurrency(ld *localeData, code string) currencyInfo {
+// resolveCurrency builds currencyInfo for the given ISO code in the locale. The
+// per-locale Currencies map is already fully resolved (inheritance pre-applied
+// by the generator), so there is no runtime fallback walk.
+func resolveCurrency(ld *data.LocaleData, code string) currencyInfo {
 	code = strings.ToUpper(code)
 	ci := currencyInfo{code: code, digits: defaultCurrencyDigits, names: map[string]string{}}
 	if d, ok := currencyDigits[code]; ok {
 		ci.digits = int(d)
 	}
-	// Locale-specific currency data, resolved through the fallback chain so a
-	// currency missing in a region locale inherits from its parent.
-	loc := canonicalLocaleTag(ld.locale)
-	seen := map[string]bool{}
-	for loc != "" && !seen[loc] {
-		seen[loc] = true
-		if cl, ok := currencyDisplayTable[loc]; ok {
-			if idx, ok := cl[code]; ok {
-				cd := currencyPool[idx]
-				ci.symbol = cd.symbol
-				ci.narrow = cd.narrow
-				for k, v := range cd.names {
-					ci.names[k] = v
-				}
-				break
-			}
+	if cd, ok := ld.Currencies[code]; ok {
+		ci.symbol = cd.Symbol
+		ci.narrow = cd.Narrow
+		for k, v := range cd.Names {
+			ci.names[k] = v
 		}
-		if p, ok := parentLocales[loc]; ok {
-			loc = p
-			continue
-		}
-		if i := strings.LastIndexByte(loc, '-'); i >= 0 {
-			loc = loc[:i]
-			continue
-		}
-		break
 	}
 	if ci.symbol == "" {
 		ci.symbol = code

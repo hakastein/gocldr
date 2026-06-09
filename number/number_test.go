@@ -11,6 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/hakastein/gocldr/number"
+	_ "github.com/hakastein/gocldr/number/locales/all"
 )
 
 type fixture struct {
@@ -173,4 +174,13 @@ func quote(s string) string {
 func jsonQuote(v float64) string {
 	b, _ := json.Marshal(v)
 	return string(b)
+}
+
+// TestUnknownLocaleDegradesToRoot verifies that a locale with nothing in its
+// fallback chain registered (here "zz", which truncates to root and has no real
+// CLDR data) degrades to the built-in root data — plain ASCII grouped decimals —
+// rather than producing empty output or panicking.
+func TestUnknownLocaleDegradesToRoot(t *testing.T) {
+	got := number.Format("zz", 1234.5, number.Options{})
+	assert.Equal(t, "1,234.5", got)
 }

@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/hakastein/gocldr/number"
+	_ "github.com/hakastein/gocldr/number/locales/all"
 )
 
 func ExampleFormat() {

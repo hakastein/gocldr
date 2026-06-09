@@ -1,10 +1,19 @@
 //go:build ignore
 
 // Command gen reads the Unicode CLDR JSON data (cldr-numbers-full and
-// cldr-core) and emits tables_gen.go for package number. It covers every
-// locale present in cldr-numbers-full (~710), deduplicating identical symbol
-// sets and patterns and storing currency fraction digits once in a supplemental
-// table.
+// cldr-core) and emits the number locale data. It covers every locale present
+// in cldr-numbers-full (~710).
+//
+// The output is split:
+//
+//   - The small shared core table is written to -out (tables_gen.go,
+//     package number): currencyDigits, numberingSystems and parentLocales.
+//   - One self-registering package per locale at locales/<tag>/data_gen.go
+//     (package locale), carrying that locale's FULLY-RESOLVED, de-interned
+//     data.LocaleData (symbols, patterns, currency display with CLDR
+//     inheritance pre-applied). A program links only the locales it imports.
+//   - locales/all/all_gen.go (package all) blank-imports every per-locale
+//     package for callers that want the full set.
 //
 // Run via: go generate ./number/...
 package main
@@ -29,7 +38,7 @@ func main() {
 	// go generate without the env var continues to work on the host machine.
 	//
 	// go generate sets the working directory to the package directory
-	// (cldr/number/), which is two levels below the repo root where
+	// (number/), which is two levels below the repo root where
 	// .reference/cldr-data lives.
 	defaultCLDR := os.Getenv("CLDR_DATA")
 	if defaultCLDR == "" {
@@ -41,56 +50,40 @@ func main() {
 	flag.Parse()
 
 	g := &generator{cldr: *cldr}
-	g.run()
-
-	src, err := format.Source(g.buf.Bytes())
-	if err != nil {
-		// Write unformatted for debugging.
-		_ = os.WriteFile(*out+".err", g.buf.Bytes(), 0o644)
-		log.Fatalf("gen: format: %v", err)
-	}
-	if err := os.WriteFile(*out, src, 0o644); err != nil {
-		log.Fatalf("gen: write: %v", err)
-	}
-	log.Printf("gen: wrote %s (%d locales, %d symbol sets, %d patterns, %d currency-display locales)",
-		*out, g.localeCount, len(g.symList), len(g.patList), g.curLocaleCount)
+	g.run(*out)
 }
 
 type generator struct {
 	cldr string
-	buf  bytes.Buffer
 
-	// dedup tables
-	symIndex map[string]int
-	symList  []symbolSet
-	patIndex map[string]int
-	patList  []string
-
-	localeEntries  map[string]localeEntry
-	localeCount    int
-	curLocaleCount int
+	localeEntries map[string]*localeEntry
+	localeCount   int
 
 	numberingSystems map[string]string
 	currencyDigits   map[string]int
 	parentLocales    map[string]string
 
-	// currency display: locale -> code -> index into curPool
-	currencyDisplay map[string]map[string]int
-	curPool         []displayCurrency
-	curIndex        map[string]int
+	// currency display: locale -> code -> own (un-inherited) display record.
+	currencyDisplay map[string]map[string]displayCurrency
+}
+
+// localeEntry is the fully-resolved, de-interned per-locale record assembled
+// from CLDR. The currency display map is filled in by resolveCurrencies after
+// all locales have been read.
+type localeEntry struct {
+	sym                         symbolSet
+	decimalPat                  string
+	percentPat                  string
+	currencyPat                 string
+	minGrouping                 int
+	digits                      string // numbering-system digit glyphs ("" => latn)
+	spacingBefore, spacingAfter string
+	unitPatterns                map[string]string
+	currencies                  map[string]displayCurrency // fully resolved
 }
 
 type symbolSet struct {
 	decimal, group, minus, percent, plus, nan, infinity string
-}
-
-type localeEntry struct {
-	symSet                                          int
-	decimalPat, percentPat, currencyPat, accounting int
-	minGrouping                                     int
-	digitSys                                        string
-	spacingBefore, spacingAfter                     string
-	unitPatterns                                    map[string]string
 }
 
 type displayCurrency struct {
@@ -98,19 +91,17 @@ type displayCurrency struct {
 	names          map[string]string
 }
 
-func (g *generator) run() {
-	g.symIndex = map[string]int{}
-	g.patIndex = map[string]int{}
-	g.localeEntries = map[string]localeEntry{}
-	g.currencyDisplay = map[string]map[string]int{}
-	g.curIndex = map[string]int{}
+func (g *generator) run(out string) {
+	g.localeEntries = map[string]*localeEntry{}
+	g.currencyDisplay = map[string]map[string]displayCurrency{}
 
 	g.loadNumberingSystems()
 	g.loadCurrencyDigits()
 	g.loadParentLocales()
 	g.loadLocales()
+	g.resolveCurrencies()
 
-	g.emit()
+	g.emit(out)
 }
 
 func (g *generator) loadNumberingSystems() {
@@ -216,10 +207,6 @@ func (g *generator) loadLocale(loc string) {
 	if err != nil {
 		return
 	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &doc); err != nil {
-		return
-	}
 	var top struct {
 		Main map[string]struct {
 			Numbers map[string]json.RawMessage `json:"numbers"`
@@ -291,7 +278,6 @@ func (g *generator) loadLocale(loc string) {
 	decStd := g.pattern(numbers, "decimalFormats-numberSystem-"+defaultNS, "decimalFormats-numberSystem-latn", "standard")
 	pctStd := g.pattern(numbers, "percentFormats-numberSystem-"+defaultNS, "percentFormats-numberSystem-latn", "standard")
 	curStd := g.pattern(numbers, "currencyFormats-numberSystem-"+defaultNS, "currencyFormats-numberSystem-latn", "standard")
-	curAcct := g.pattern(numbers, "currencyFormats-numberSystem-"+defaultNS, "currencyFormats-numberSystem-latn", "accounting")
 
 	if decStd == "" {
 		decStd = "#,##0.###"
@@ -302,28 +288,27 @@ func (g *generator) loadLocale(loc string) {
 	if curStd == "" {
 		curStd = "¤#,##0.00"
 	}
-	if curAcct == "" {
-		curAcct = curStd
-	}
 
 	// Currency spacing + unit patterns from currencyFormats.
 	spacingBefore, spacingAfter, unitPats := g.currencyExtras(numbers, defaultNS)
 
-	digitSys := ""
+	// Resolve the numbering-system digit glyphs at generation time, so the
+	// per-locale record carries them directly (no runtime numberingSystems
+	// lookup). latn => "" (ASCII digits, no substitution).
+	digits := ""
 	if defaultNS != "latn" {
-		if _, ok := g.numberingSystems[defaultNS]; ok {
-			digitSys = defaultNS
+		if glyphs, ok := g.numberingSystems[defaultNS]; ok {
+			digits = glyphs
 		}
 	}
 
-	entry := localeEntry{
-		symSet:        g.internSym(ss),
-		decimalPat:    g.internPat(decStd),
-		percentPat:    g.internPat(pctStd),
-		currencyPat:   g.internPat(curStd),
-		accounting:    g.internPat(curAcct),
+	entry := &localeEntry{
+		sym:           ss,
+		decimalPat:    decStd,
+		percentPat:    pctStd,
+		currencyPat:   curStd,
 		minGrouping:   minGroup,
-		digitSys:      digitSys,
+		digits:        digits,
 		spacingBefore: spacingBefore,
 		spacingAfter:  spacingAfter,
 		unitPatterns:  unitPats,
@@ -331,7 +316,7 @@ func (g *generator) loadLocale(loc string) {
 	g.localeEntries[loc] = entry
 	g.localeCount++
 
-	// Currency display data.
+	// Currency display data (own, un-inherited).
 	g.loadCurrencyDisplay(loc)
 }
 
@@ -412,18 +397,9 @@ func (g *generator) loadCurrencyDisplay(loc string) {
 	if len(curs) == 0 {
 		return
 	}
-	// Sort currency codes so pool indices are assigned deterministically across
-	// runs (Go map iteration order is random; without sorting, the currencyPool
-	// in the generated file shuffles on every run even with identical input).
-	curCodes := make([]string, 0, len(curs))
-	for code := range curs {
-		curCodes = append(curCodes, code)
-	}
-	sort.Strings(curCodes)
 
-	out := map[string]int{}
-	for _, code := range curCodes {
-		fields := curs[code]
+	out := map[string]displayCurrency{}
+	for code, fields := range curs {
 		dc := displayCurrency{
 			symbol: fields["symbol"],
 			narrow: fields["symbol-alt-narrow"],
@@ -445,91 +421,82 @@ func (g *generator) loadCurrencyDisplay(loc string) {
 		}
 		// Only store if there is something locale-specific.
 		if dc.symbol != "" || dc.narrow != "" || dc.names != nil {
-			out[code] = g.internCur(dc)
+			out[code] = dc
 		}
 	}
 	if len(out) > 0 {
 		g.currencyDisplay[loc] = out
-		g.curLocaleCount++
 	}
 }
 
-func (g *generator) internCur(dc displayCurrency) int {
-	keys := make([]string, 0, len(dc.names))
-	for k := range dc.names {
-		keys = append(keys, k)
+// resolveCurrencies fills each locale's fully-resolved Currencies map by walking
+// the CLDR fallback chain (exact -> parentLocale -> truncate) and taking, for
+// every currency code that appears anywhere in the chain, the FIRST display
+// record found (first-hit-wins per code). This mirrors exactly the runtime walk
+// the old resolveCurrency performed, but pre-applied here once at gen time.
+func (g *generator) resolveCurrencies() {
+	for loc, entry := range g.localeEntries {
+		resolved := map[string]displayCurrency{}
+		cur := canonicalLocaleTag(loc)
+		seen := map[string]bool{}
+		for cur != "" && !seen[cur] {
+			seen[cur] = true
+			if cl, ok := g.currencyDisplay[cur]; ok {
+				for code, dc := range cl {
+					if _, exists := resolved[code]; !exists {
+						resolved[code] = dc
+					}
+				}
+			}
+			if p, ok := g.parentLocales[cur]; ok {
+				cur = p
+				continue
+			}
+			if i := strings.LastIndexByte(cur, '-'); i >= 0 {
+				cur = cur[:i]
+				continue
+			}
+			break
+		}
+		if len(resolved) > 0 {
+			entry.currencies = resolved
+		}
 	}
-	sort.Strings(keys)
-	var nb strings.Builder
-	for _, k := range keys {
-		nb.WriteString(k)
-		nb.WriteByte('=')
-		nb.WriteString(dc.names[k])
-		nb.WriteByte('\x1f')
-	}
-	key := dc.symbol + "\x1e" + dc.narrow + "\x1e" + nb.String()
-	if i, ok := g.curIndex[key]; ok {
-		return i
-	}
-	i := len(g.curPool)
-	g.curPool = append(g.curPool, dc)
-	g.curIndex[key] = i
-	return i
 }
 
-func (g *generator) internSym(ss symbolSet) int {
-	k := strings.Join([]string{ss.decimal, ss.group, ss.minus, ss.percent, ss.plus, ss.nan, ss.infinity}, "\x1f")
-	if i, ok := g.symIndex[k]; ok {
-		return i
+// canonicalLocaleTag mirrors the runtime helper of the same name so the
+// fallback chain used to pre-resolve currency display matches the one the
+// number package walks at lookup time.
+func canonicalLocaleTag(loc string) string {
+	loc = strings.ReplaceAll(loc, "_", "-")
+	parts := strings.Split(loc, "-")
+	for i, p := range parts {
+		switch {
+		case i == 0:
+			parts[i] = strings.ToLower(p)
+		case len(p) == 2:
+			parts[i] = strings.ToUpper(p)
+		case len(p) == 4:
+			parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
+		default:
+			parts[i] = strings.ToLower(p)
+		}
 	}
-	i := len(g.symList)
-	g.symList = append(g.symList, ss)
-	g.symIndex[k] = i
-	return i
+	return strings.Join(parts, "-")
 }
 
-func (g *generator) internPat(p string) int {
-	if i, ok := g.patIndex[p]; ok {
-		return i
-	}
-	i := len(g.patList)
-	g.patList = append(g.patList, p)
-	g.patIndex[p] = i
-	return i
-}
-
-func (g *generator) emit() {
-	b := &g.buf
-	p := func(format string, a ...any) { fmt.Fprintf(b, format, a...) }
+func (g *generator) emit(out string) {
+	// ---- core shared table (-out, package number) ----
+	var b bytes.Buffer
+	p := func(format string, a ...any) { fmt.Fprintf(&b, format, a...) }
 
 	p("// Code generated by internal/gen; DO NOT EDIT.\n\n")
 	p("package number\n\n")
 
-	// symbolSet type + table.
-	p("// symbolSet holds a deduplicated set of locale number symbols.\n")
-	p("type symbolSet struct {\n")
-	p("\tdecimal, group, minus, percent, plus, nan, infinity string\n")
-	p("}\n\n")
-	p("var symbolSets = [...]symbolSet{\n")
-	for _, ss := range g.symList {
-		p("\t{%s, %s, %s, %s, %s, %s, %s},\n",
-			q(ss.decimal), q(ss.group), q(ss.minus), q(ss.percent), q(ss.plus), q(ss.nan), q(ss.infinity))
-	}
-	p("}\n\n")
-
-	// pattern table.
-	p("// patternTable holds deduplicated CLDR number patterns.\n")
-	p("var patternTable = [...]string{\n")
-	for _, pat := range g.patList {
-		p("\t%s,\n", q(pat))
-	}
-	p("}\n\n")
-
 	// numbering systems digit map.
 	p("// numberingSystems maps a numbering system id to its 10 digit glyphs.\n")
 	p("var numberingSystems = map[string]string{\n")
-	nsKeys := sortedKeys(g.numberingSystems)
-	for _, k := range nsKeys {
+	for _, k := range sortedKeys(g.numberingSystems) {
 		p("\t%s: %s,\n", q(k), q(g.numberingSystems[k]))
 	}
 	p("}\n\n")
@@ -538,8 +505,7 @@ func (g *generator) emit() {
 	p("// currencyDigits maps an ISO 4217 code to its CLDR default fraction digits.\n")
 	p("// Codes absent here use defaultCurrencyDigits (2).\n")
 	p("var currencyDigits = map[string]int8{\n")
-	cdKeys := sortedIntKeys(g.currencyDigits)
-	for _, k := range cdKeys {
+	for _, k := range sortedIntKeys(g.currencyDigits) {
 		p("\t%s: %d,\n", q(k), g.currencyDigits[k])
 	}
 	p("}\n\n")
@@ -547,74 +513,143 @@ func (g *generator) emit() {
 	// parent locales.
 	p("// parentLocales is the CLDR parentLocale override map for fallback.\n")
 	p("var parentLocales = map[string]string{\n")
-	plKeys := sortedKeys(g.parentLocales)
-	for _, k := range plKeys {
+	for _, k := range sortedKeys(g.parentLocales) {
 		p("\t%s: %s,\n", q(k), q(g.parentLocales[k]))
 	}
-	p("}\n\n")
-
-	// localeEntry type + table.
-	p("// localeEntry is the compact per-locale record. Pattern/symbol fields are\n")
-	p("// indices into patternTable / symbolSets.\n")
-	p("type localeEntry struct {\n")
-	p("\tsymSet                                     int32\n")
-	p("\tdecimalPat, percentPat, currencyPat, accountingPat int32\n")
-	p("\tminGrouping                                int8\n")
-	p("\tdigitSys                                   string\n")
-	p("\tspacingBefore, spacingAfter                string\n")
-	p("\tunitPatterns                               map[string]string\n")
-	p("}\n\n")
-
-	p("var localeTable = map[string]localeEntry{\n")
-	locKeys := sortedKeys2(g.localeEntries)
-	for _, k := range locKeys {
-		e := g.localeEntries[k]
-		p("\t%s: {%d, %d, %d, %d, %d, %d, %s, %s, %s, %s},\n",
-			q(k), e.symSet, e.decimalPat, e.percentPat, e.currencyPat, e.accounting,
-			e.minGrouping, q(e.digitSys), q(e.spacingBefore), q(e.spacingAfter),
-			mapLit(e.unitPatterns))
-	}
-	p("}\n\n")
-
-	// currency display.
-	p("// displayCurrency holds locale-specific currency display data.\n")
-	p("type displayCurrency struct {\n")
-	p("\tsymbol, narrow string\n")
-	p("\tnames          map[string]string\n")
-	p("}\n\n")
-
-	// Global deduplicated pool of displayCurrency values.
-	p("// currencyPool is the deduplicated pool of currency display records;\n")
-	p("// currencyDisplayTable entries are indices into it.\n")
-	p("var currencyPool = [...]displayCurrency{\n")
-	for _, dc := range g.curPool {
-		p("\t{%s, %s, %s},\n", q(dc.symbol), q(dc.narrow), mapLit(dc.names))
-	}
-	p("}\n\n")
-
-	p("// currencyDisplayTable maps locale -> ISO code -> index into currencyPool.\n")
-	p("var currencyDisplayTable = map[string]map[string]int32{\n")
-	cdlKeys := sortedKeys3(g.currencyDisplay)
-	for _, loc := range cdlKeys {
-		codes := g.currencyDisplay[loc]
-		ckeys := make([]string, 0, len(codes))
-		for c := range codes {
-			ckeys = append(ckeys, c)
-		}
-		sort.Strings(ckeys)
-		p("\t%s: {", q(loc))
-		for i, c := range ckeys {
-			if i > 0 {
-				p(", ")
-			}
-			p("%s: %d", q(c), codes[c])
-		}
-		p("},\n")
-	}
 	p("}\n")
+
+	if err := writeFormatted(out, b.Bytes()); err != nil {
+		log.Fatal(err)
+	}
+
+	// The per-locale packages live under locales/, resolved relative to the
+	// directory holding -out (i.e. the number package dir, which is also the
+	// //go:generate working directory).
+	localesDir := filepath.Join(filepath.Dir(out), "locales")
+
+	locKeys := sortedEntryKeys(g.localeEntries)
+
+	// One self-registering package per locale: locales/<tag>/data_gen.go.
+	for _, loc := range locKeys {
+		var lb bytes.Buffer
+		lb.WriteString("// Code generated by internal/gen; DO NOT EDIT.\n")
+		lb.WriteString("// Source: Unicode CLDR cldr-numbers-full / cldr-core.\n\n")
+		lb.WriteString(fmt.Sprintf("// Package locale registers the number locale data for %q.\n", loc))
+		lb.WriteString("// Blank-import it to make that locale available to gocldr/number.\n")
+		lb.WriteString("package locale\n\n")
+		lb.WriteString("import \"github.com/hakastein/gocldr/number/internal/data\"\n\n")
+		lb.WriteString("func init() {\n")
+		lb.WriteString(fmt.Sprintf("\tdata.Register(%q, &data.LocaleData", loc))
+		writeLocaleData(&lb, g.localeEntries[loc])
+		lb.WriteString(")\n}\n")
+
+		dir := filepath.Join(localesDir, loc)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			log.Fatal(err)
+		}
+		if err := writeFormatted(filepath.Join(dir, "data_gen.go"), lb.Bytes()); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// locales/all blank-imports every per-locale package so a program can pull
+	// in the full set with a single import.
+	var ab bytes.Buffer
+	ab.WriteString("// Code generated by internal/gen; DO NOT EDIT.\n")
+	ab.WriteString("// Source: Unicode CLDR cldr-numbers-full / cldr-core.\n\n")
+	ab.WriteString("// Package all blank-imports every number per-locale data package, so a\n")
+	ab.WriteString("// program that imports it registers the data for every supported locale.\n")
+	ab.WriteString("package all\n\n")
+	ab.WriteString("import (\n")
+	for _, loc := range locKeys {
+		ab.WriteString(fmt.Sprintf("\t_ \"github.com/hakastein/gocldr/number/locales/%s\"\n", loc))
+	}
+	ab.WriteString(")\n")
+	allDir := filepath.Join(localesDir, "all")
+	if err := os.MkdirAll(allDir, 0o755); err != nil {
+		log.Fatal(err)
+	}
+	if err := writeFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
+		log.Fatal(err)
+	}
+
+	log.Printf("gen: wrote %s + %d locales/<tag>/data_gen.go + locales/all: locales=%d numberingSystems=%d currencyDigits=%d parentLocales=%d",
+		out, len(locKeys), g.localeCount, len(g.numberingSystems), len(g.currencyDigits), len(g.parentLocales))
+}
+
+// writeLocaleData emits a composite literal for the resolved per-locale record
+// (the part after "&data.LocaleData"), matching the data.LocaleData field set.
+func writeLocaleData(buf *bytes.Buffer, e *localeEntry) {
+	buf.WriteString("{")
+	buf.WriteString(fmt.Sprintf("Sym: data.Symbols{Decimal: %s, Group: %s, Minus: %s, Percent: %s, Plus: %s, NaN: %s, Infinity: %s}, ",
+		q(e.sym.decimal), q(e.sym.group), q(e.sym.minus), q(e.sym.percent), q(e.sym.plus), q(e.sym.nan), q(e.sym.infinity)))
+	buf.WriteString(fmt.Sprintf("Decimal: %s, ", q(e.decimalPat)))
+	buf.WriteString(fmt.Sprintf("Percent: %s, ", q(e.percentPat)))
+	buf.WriteString(fmt.Sprintf("Currency: %s, ", q(e.currencyPat)))
+	buf.WriteString(fmt.Sprintf("MinGrouping: %d, ", e.minGrouping))
+	if e.digits != "" {
+		buf.WriteString(fmt.Sprintf("Digits: %s, ", q(e.digits)))
+	}
+	if e.spacingBefore != "" {
+		buf.WriteString(fmt.Sprintf("SpacingBefore: %s, ", q(e.spacingBefore)))
+	}
+	if e.spacingAfter != "" {
+		buf.WriteString(fmt.Sprintf("SpacingAfter: %s, ", q(e.spacingAfter)))
+	}
+	writeStrMap(buf, "UnitPatterns", e.unitPatterns)
+	writeCurrencies(buf, e.currencies)
+	buf.WriteString("}")
+}
+
+func writeStrMap(buf *bytes.Buffer, field string, m map[string]string) {
+	if len(m) == 0 {
+		return
+	}
+	buf.WriteString(field + ": map[string]string{")
+	for _, k := range sortedKeys(m) {
+		buf.WriteString(fmt.Sprintf("%s: %s, ", q(k), q(m[k])))
+	}
+	buf.WriteString("}, ")
+}
+
+func writeCurrencies(buf *bytes.Buffer, m map[string]displayCurrency) {
+	if len(m) == 0 {
+		return
+	}
+	codes := make([]string, 0, len(m))
+	for c := range m {
+		codes = append(codes, c)
+	}
+	sort.Strings(codes)
+	buf.WriteString("Currencies: map[string]data.CurrencyDisplay{")
+	for _, c := range codes {
+		dc := m[c]
+		buf.WriteString(fmt.Sprintf("%s: {", q(c)))
+		buf.WriteString(fmt.Sprintf("Symbol: %s, Narrow: %s", q(dc.symbol), q(dc.narrow)))
+		if len(dc.names) > 0 {
+			buf.WriteString(", Names: map[string]string{")
+			for _, nk := range sortedKeys(dc.names) {
+				buf.WriteString(fmt.Sprintf("%s: %s, ", q(nk), q(dc.names[nk])))
+			}
+			buf.WriteString("}")
+		}
+		buf.WriteString("}, ")
+	}
+	buf.WriteString("}")
 }
 
 // ---- helpers ----
+
+// writeFormatted runs src through gofmt and writes it to path, dumping a
+// .broken sibling on a gofmt failure for debugging.
+func writeFormatted(path string, src []byte) error {
+	formatted, err := format.Source(src)
+	if err != nil {
+		_ = os.WriteFile(path+".broken", src, 0o644)
+		return fmt.Errorf("gofmt failed for %s: %w (wrote %s.broken)", path, err, path)
+	}
+	return os.WriteFile(path, formatted, 0o644)
+}
 
 func mustJSON(path string, v any) {
 	raw, err := os.ReadFile(path)
@@ -639,29 +674,6 @@ func jsonString(raw json.RawMessage) string {
 
 func q(s string) string { return strconv.Quote(s) }
 
-func mapLit(m map[string]string) string {
-	if len(m) == 0 {
-		return "nil"
-	}
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	var b strings.Builder
-	b.WriteString("map[string]string{")
-	for i, k := range keys {
-		if i > 0 {
-			b.WriteString(", ")
-		}
-		b.WriteString(q(k))
-		b.WriteString(": ")
-		b.WriteString(q(m[k]))
-	}
-	b.WriteString("}")
-	return b.String()
-}
-
 func sortedKeys(m map[string]string) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
@@ -680,16 +692,7 @@ func sortedIntKeys(m map[string]int) []string {
 	return keys
 }
 
-func sortedKeys2(m map[string]localeEntry) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
-
-func sortedKeys3(m map[string]map[string]int) []string {
+func sortedEntryKeys(m map[string]*localeEntry) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {
 		keys = append(keys, k)

@@ -18,6 +18,8 @@ import (
 	"math"
 	"strings"
 	"unicode"
+
+	"github.com/hakastein/gocldr/number/internal/data"
 )
 
 //go:generate go run ./internal/gen/main.go -out tables_gen.go
@@ -74,7 +76,7 @@ func Format(locale string, value float64, opts Options) string {
 
 	// Handle non-finite values the way Intl does.
 	if math.IsNaN(value) {
-		return ld.sym.nan
+		return ld.Sym.NaN
 	}
 
 	// Pick the base pattern.
@@ -85,17 +87,17 @@ func Format(locale string, value float64, opts Options) string {
 	var pattern string
 	switch style {
 	case "percent":
-		pattern = ld.percent
+		pattern = ld.Percent
 	case "currency":
 		if display == "name" {
 			// currencyDisplay:"name" uses the decimal pattern plus a unit
 			// pattern wrapper.
-			pattern = ld.decimal
+			pattern = ld.Decimal
 		} else {
-			pattern = ld.currency
+			pattern = ld.Currency
 		}
 	default:
-		pattern = ld.decimal
+		pattern = ld.Decimal
 	}
 
 	// Resolve digit-count options into concrete values.
@@ -108,7 +110,7 @@ func Format(locale string, value float64, opts Options) string {
 	}
 
 	if math.IsInf(scaled, 0) {
-		body := ld.sym.infinity
+		body := ld.Sym.Infinity
 		neg := math.Signbit(scaled)
 		return wrapPattern(ld, pattern, body, neg, style, display, cur, "")
 	}
@@ -131,7 +133,7 @@ func Format(locale string, value float64, opts Options) string {
 	// actually shown (Intl derives plural operands from the formatted number).
 	plCat := ""
 	if style == "currency" && display == "name" {
-		plCat = pluralCategoryForDigits(ld.locale, intPart, fracPart)
+		plCat = pluralCategoryForDigits(locale, intPart, fracPart)
 	}
 
 	return wrapPattern(ld, pattern, body, negative, style, display, cur, plCat)
@@ -343,7 +345,7 @@ func padInt(intPart string, minInt int) string {
 
 // applyGrouping inserts the locale group separator into the integer digit
 // string per the pattern's grouping sizes and the grouping options.
-func applyGrouping(ld *localeData, pattern, intPart string, o *Options, style string) string {
+func applyGrouping(ld *data.LocaleData, pattern, intPart string, o *Options, style string) string {
 	mode := groupingMode(o)
 	if mode == groupOff {
 		return intPart
@@ -357,7 +359,7 @@ func applyGrouping(ld *localeData, pattern, intPart string, o *Options, style st
 	n := len(intPart)
 	// minimumGroupingDigits / min2: suppress grouping when the integer has too
 	// few digits.
-	minGroupDigits := ld.minGrouping
+	minGroupDigits := ld.MinGrouping
 	if mode == groupMin2 && minGroupDigits < 2 {
 		minGroupDigits = 2
 	}
@@ -428,7 +430,7 @@ func groupingMode(o *Options) groupMode {
 // wrapPattern applies prefix/suffix from the (positive or negative) subpattern,
 // substitutes locale symbols and currency markers, applies digit substitution
 // for non-latn numbering systems, and returns the final string.
-func wrapPattern(ld *localeData, pattern, body string, negative bool, style, display string, cur currencyInfo, plCat string) string {
+func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, style, display string, cur currencyInfo, plCat string) string {
 	pos, neg := splitSubpatterns(pattern)
 	var sub subpattern
 	var minus string
@@ -439,7 +441,7 @@ func wrapPattern(ld *localeData, pattern, body string, negative bool, style, dis
 			usedNegSub = true
 		} else {
 			sub = pos
-			minus = ld.sym.minus
+			minus = ld.Sym.Minus
 		}
 	} else {
 		sub = pos
@@ -448,8 +450,8 @@ func wrapPattern(ld *localeData, pattern, body string, negative bool, style, dis
 	// Replace the decimal point FIRST (the body's only literal '.'), then
 	// expand grouping placeholders. Doing it in this order avoids confusing a
 	// just-inserted group separator that may itself be '.' (e.g. de/es).
-	body = strings.Replace(body, ".", ld.sym.decimal, 1)
-	body = strings.ReplaceAll(body, "\x00", ld.sym.group)
+	body = strings.Replace(body, ".", ld.Sym.Decimal, 1)
+	body = strings.ReplaceAll(body, "\x00", ld.Sym.Group)
 
 	prefix := sub.prefix
 	suffix := sub.suffix
@@ -457,8 +459,8 @@ func wrapPattern(ld *localeData, pattern, body string, negative bool, style, dis
 	// placeholder and is rendered using the locale's minusSign symbol (which in
 	// some locales, e.g. Arabic, carries bidi marks like LRM).
 	if usedNegSub {
-		prefix = strings.ReplaceAll(prefix, "-", ld.sym.minus)
-		suffix = strings.ReplaceAll(suffix, "-", ld.sym.minus)
+		prefix = strings.ReplaceAll(prefix, "-", ld.Sym.Minus)
+		suffix = strings.ReplaceAll(suffix, "-", ld.Sym.Minus)
 	}
 
 	out := minus + prefix + body + suffix
@@ -476,8 +478,8 @@ func wrapPattern(ld *localeData, pattern, body string, negative bool, style, dis
 	}
 
 	// Digit substitution for non-latn numbering systems.
-	if ld.digits != "" {
-		out = substituteDigits(out, ld.digits)
+	if ld.Digits != "" {
+		out = substituteDigits(out, ld.Digits)
 	}
 	return out
 }
@@ -485,9 +487,9 @@ func wrapPattern(ld *localeData, pattern, body string, negative bool, style, dis
 // substituteSymbols replaces the literal pattern symbols (% and the ASCII
 // minus produced for negatives) with the locale's symbols. The '%' in a pattern
 // maps to the locale percentSign.
-func substituteSymbols(ld *localeData, s string) string {
+func substituteSymbols(ld *data.LocaleData, s string) string {
 	if strings.IndexByte(s, '%') >= 0 {
-		s = strings.ReplaceAll(s, "%", ld.sym.percent)
+		s = strings.ReplaceAll(s, "%", ld.Sym.Percent)
 	}
 	return s
 }
@@ -512,7 +514,7 @@ func substituteDigits(s, digits string) string {
 
 // insertCurrencySymbol replaces the ¤ marker with the chosen currency display
 // form, honouring currency spacing.
-func insertCurrencySymbol(ld *localeData, s string, cur currencyInfo, display string) string {
+func insertCurrencySymbol(ld *data.LocaleData, s string, cur currencyInfo, display string) string {
 	var symbol string
 	switch display {
 	case "narrowSymbol":
@@ -545,12 +547,12 @@ func insertCurrencySymbol(ld *localeData, s string, cur currencyInfo, display st
 	// insertBetween (typically a NBSP / space).
 	if symbolBefore {
 		if needSpaceAfterSymbol(symbol, after, ld) {
-			return before + symbol + ld.spacingBefore + after
+			return before + symbol + ld.SpacingBefore + after
 		}
 		return before + symbol + after
 	}
 	if needSpaceBeforeSymbol(symbol, before, ld) {
-		return before + ld.spacingAfter + symbol + after
+		return before + ld.SpacingAfter + symbol + after
 	}
 	return before + symbol + after
 }
@@ -569,7 +571,7 @@ func containsASCIIDigit(s string) bool {
 // needSpaceAfterSymbol implements the beforeCurrency spacing rule: insert a
 // space when the symbol ends with a letter/digit (not a symbol/space) and the
 // following text starts with a digit.
-func needSpaceAfterSymbol(symbol, after string, ld *localeData) bool {
+func needSpaceAfterSymbol(symbol, after string, ld *data.LocaleData) bool {
 	if symbol == "" || after == "" {
 		return false
 	}
@@ -581,7 +583,7 @@ func needSpaceAfterSymbol(symbol, after string, ld *localeData) bool {
 	return first >= '0' && first <= '9'
 }
 
-func needSpaceBeforeSymbol(symbol, before string, ld *localeData) bool {
+func needSpaceBeforeSymbol(symbol, before string, ld *data.LocaleData) bool {
 	if symbol == "" || before == "" {
 		return false
 	}
@@ -619,7 +621,7 @@ func lastRune(s string) rune {
 // applyCurrencyName implements currencyDisplay:"name": it replaces the ¤ marker
 // (if present) and wraps the formatted number with the plural-selected currency
 // display name via the locale unit pattern.
-func applyCurrencyName(ld *localeData, s string, cur currencyInfo, cat string) string {
+func applyCurrencyName(ld *data.LocaleData, s string, cur currencyInfo, cat string) string {
 	// Remove any ¤ marker that came from the pattern (decimal pattern has none).
 	s = strings.ReplaceAll(s, "¤", "")
 	name := cur.names[cat]
@@ -629,9 +631,9 @@ func applyCurrencyName(ld *localeData, s string, cur currencyInfo, cat string) s
 	if name == "" {
 		name = cur.code
 	}
-	pat := ld.unitPatterns[cat]
+	pat := ld.UnitPatterns[cat]
 	if pat == "" {
-		pat = ld.unitPatterns["other"]
+		pat = ld.UnitPatterns["other"]
 	}
 	if pat == "" {
 		pat = "{0} {1}"
