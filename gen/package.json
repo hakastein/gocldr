@@ -1,7 +1,7 @@
 {
-  "name": "gofluent-cldrgen",
+  "name": "gocldr-cldrgen",
   "private": true,
-  "description": "Pinned CLDR JSON data for gofluent code generation. The version here is the single source of truth for which CLDR release the generated tables describe; it is matched to the Node image's bundled ICU/CLDR so generated tables and Intl golden fixtures agree by construction.",
+  "description": "Pinned CLDR JSON data for gocldr code generation. The version here is the single source of truth for which CLDR release the generated tables describe; it is matched to the Node image's bundled ICU/CLDR so generated tables and Intl golden fixtures agree by construction.",
   "dependencies": {
     "cldr-core": "46.0.0",
     "cldr-numbers-full": "46.0.0",

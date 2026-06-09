@@ -18,9 +18,9 @@ body:
   - type: textarea
     id: reference
     attributes:
-      label: fluent.js / ECMA-402 reference
+      label: ECMA-402 / Intl reference
       description: >
-        gocldr deliberately follows fluent.js and ECMA-402 `Intl.*` behavior.
+        gocldr deliberately follows ECMA-402 `Intl.*` behavior.
         If your request concerns parsing or formatting, please link the
         corresponding upstream behavior so we can keep parity.
     validations:

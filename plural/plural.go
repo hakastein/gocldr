@@ -1,7 +1,7 @@
 // Package plural provides CLDR plural-rule selection (cardinal and ordinal)
 // for Go, generated directly from the Unicode CLDR data. It has zero external
 // dependencies and is designed to match the behaviour of JavaScript's
-// Intl.PluralRules (and therefore fluent.js) exactly.
+// Intl.PluralRules exactly.
 //
 // The plural rule tables in tables_gen.go are produced by the generator in
 // internal/gen. To regenerate them, run:

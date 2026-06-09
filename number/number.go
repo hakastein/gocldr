@@ -1,17 +1,12 @@
 // Package number provides CLDR-driven number, percent and currency formatting
 // for Go, generated directly from the Unicode CLDR data (cldr-numbers-full and
 // cldr-core). It has ZERO external dependencies and is designed to match the
-// behaviour of JavaScript's Intl.NumberFormat (and therefore fluent.js) as
-// closely as possible.
+// behaviour of JavaScript's Intl.NumberFormat (ECMA-402) as closely as possible.
 //
 // The locale tables in tables_gen.go are produced by the generator in
 // internal/gen. To regenerate them, run:
 //
 //	go generate ./number/...
-//
-// The package is deliberately standalone: it does not import the core fluent
-// package. A higher layer (fluentx) maps fluent's NumberOptions onto this
-// package's Options.
 package number
 
 import (
@@ -25,10 +20,9 @@ import (
 //go:generate go run ./internal/gen/main.go -out tables_gen.go
 //go:generate node internal/gen/fixtures.js
 
-// Options mirrors the subset of Intl.NumberFormatOptions used by fluent.js. It
-// is a value copy of the core fluent.NumberOptions field set, kept here so the
-// package stays dependency-free. Pointer fields distinguish "unset" from a zero
-// value, mirroring how Intl merges option bags.
+// Options mirrors the commonly used subset of Intl.NumberFormatOptions (ECMA-402).
+// Pointer fields distinguish "unset" from a zero value, mirroring how Intl
+// merges option bags.
 type Options struct {
 	// Style is "decimal" (default), "percent" or "currency".
 	Style string

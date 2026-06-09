@@ -1,4 +1,4 @@
-# Pinned, hermetic CLDR generation toolchain for gofluent.
+# Pinned, hermetic CLDR generation toolchain for gocldr.
 #
 # Why this exists: the generated cldr/* tables and the golden Intl fixtures must
 # describe the SAME CLDR release. The host's Node bundles whatever ICU/CLDR it was

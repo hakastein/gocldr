@@ -1,7 +1,7 @@
 // Package datetime provides CLDR-based date/time formatting for Go, generated
 // directly from the Unicode CLDR data (cldr-dates-full). It has ZERO external
 // dependencies (standard-library time only) and is designed to match the
-// behaviour of JavaScript's Intl.DateTimeFormat (and therefore fluent.js) for
+// behaviour of JavaScript's Intl.DateTimeFormat (ECMA-402) for
 // the dateStyle/timeStyle styles and the common component options.
 //
 // The symbol/pattern tables in tables_gen.go are produced by the generator in
@@ -28,10 +28,8 @@ import (
 //go:generate go run ./internal/gen/main.go -out tables_gen.go
 //go:generate sh -c "node internal/gen/fixtures.js > testdata/intl_dates.json"
 
-// Options mirrors the subset of Intl.DateTimeFormatOptions that fluent.js uses.
-// It intentionally mirrors the field names of fluent.DateTimeOptions in the
-// core package (without importing it). Empty strings / nil pointers mean
-// "unset".
+// Options mirrors the commonly used subset of Intl.DateTimeFormatOptions (ECMA-402).
+// Empty strings / nil pointers mean "unset".
 type Options struct {
 	Hour12                 *bool
 	Weekday                string // "long" | "short" | "narrow"
