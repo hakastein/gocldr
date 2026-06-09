@@ -1,0 +1,2 @@
+# Build context is gen/ only; keep it minimal.
+node_modules/
