@@ -20,7 +20,6 @@ type LocaleData struct {
 	QuartersStd  map[string][]string
 
 	DayPeriodsFmt map[string]map[string]string
-	DayPeriodsStd map[string]map[string]string
 	Eras          map[string][]string
 
 	DateFormats map[string]string

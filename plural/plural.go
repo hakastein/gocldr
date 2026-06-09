@@ -21,8 +21,8 @@ import (
 	"github.com/hakastein/gocldr/internal/decimal"
 )
 
-// CLDR input paths come from $CLDR_DATA (set by the pinned gen image), falling
-// back to the checked-in host copy. Run via `make gen`; never on the host.
+// CLDR input paths come from $CLDR_DATA (set by the pinned gen image).
+// Run via `make gen`; never on the host.
 //go:generate go run ./internal/gen/main.go -out tables_gen.go
 //go:generate node internal/gen/samples.js testdata/cldr_samples.json
 //go:generate node internal/gen/intl.js testdata/intl_plurals.json

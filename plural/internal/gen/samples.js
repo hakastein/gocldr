@@ -14,16 +14,19 @@ const path = require('path');
 // Two call forms:
 //   node samples.js <plurals.json> <ordinals.json> <out.json>   (explicit paths)
 //   node samples.js <out.json>                                   (paths from $CLDR_DATA)
-// In the second form the CLDR base is $CLDR_DATA (the pinned Docker toolchain's
-// node_modules), falling back to the checked-in host copy so host runs still work.
+// The second form derives the CLDR paths from $CLDR_DATA (set by the pinned gen
+// image). Run via `make gen`, never on the host.
 let plularsPath, ordinalsPath, outPath;
 if (process.argv.length >= 5) {
   plularsPath = process.argv[2];
   ordinalsPath = process.argv[3];
   outPath = process.argv[4];
 } else {
-  const base = process.env.CLDR_DATA ||
-    path.resolve(__dirname, '../../../../.reference/cldr-data/node_modules');
+  const base = process.env.CLDR_DATA;
+  if (!base) {
+    console.error('gen: CLDR_DATA is unset; run via `make gen`, never on the host');
+    process.exit(1);
+  }
   plularsPath = path.join(base, 'cldr-core', 'supplemental', 'plurals.json');
   ordinalsPath = path.join(base, 'cldr-core', 'supplemental', 'ordinals.json');
   outPath = process.argv[2];
