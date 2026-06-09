@@ -196,9 +196,9 @@ func main() {
 	}
 	buf.WriteString("\t}\n}\n")
 
-	// Write the small shared core table to -out. The per-locale data now lives
-	// in self-registering packages under locales/ (see below), so this file no
-	// longer carries localeBlobs/localeIndex.
+	// Write the small shared core table to -out. Per-locale data lives in
+	// self-registering packages under locales/ (see below); this file contains
+	// only the shared core tables (zone maps, metazone coverage, etc.).
 	if err := writeFormatted(*outPath, buf.Bytes()); err != nil {
 		log.Fatal(err)
 	}

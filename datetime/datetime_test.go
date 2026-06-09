@@ -49,7 +49,7 @@ func toOptions(m map[string]any) datetime.Options {
 	o.DayPeriod = str("dayPeriod")
 	o.Calendar = str("calendar")
 	o.NumberingSystem = str("numberingSystem")
-	// Use the fixture's own timeZone (the generator now stores the merged opts,
+	// Use the fixture's own timeZone (the generator stores the merged opts,
 	// including timeZone). Default to UTC when absent so legacy fixtures and the
 	// UTC-based instants still resolve correctly.
 	o.TimeZone = str("timeZone")
