@@ -153,13 +153,6 @@ func (c *formatCtx) resolvePattern() string {
 			datePat = c.ld.DateFormats[o.DateStyle]
 		}
 		if hasTime {
-			// ICU pads a single-digit hour to two digits when the caller forces a
-			// 24-hour clock onto a locale that defaults to a 12-hour clock (e.g. en
-			// timeStyle:"short" + hour12:false -> "09:07"). The reverse stays as the
-			// pattern's own width. This mirrors the component path below.
-			if o.Hour12 != nil && !*o.Hour12 && c.localeUses12() {
-				c.padNumericHour = true
-			}
 			timePat = c.ld.TimeFormats[o.TimeStyle]
 			timePat = c.applyHourCycle(timePat)
 		}
@@ -176,21 +169,6 @@ func (c *formatCtx) resolvePattern() string {
 		default:
 			return timePat
 		}
-	}
-
-	// ICU renders a "numeric" hour padded to two digits when the caller forces a
-	// 24-hour clock onto a locale that defaults to a 12-hour clock (e.g. en with
-	// hour12:false -> "09:07"). The reverse (forcing 12-hour onto a 24-hour
-	// locale) stays unpadded. Detect that asymmetric case here.
-	if o.Hour == "numeric" && o.Hour12 != nil && !*o.Hour12 && c.localeUses12() {
-		c.padNumericHour = true
-	}
-
-	// ICU keeps a "numeric" hour padded to two digits when the resolved 24-hour
-	// pattern (HH) also carries a zone name but NO seconds (e.g. de "09:07 UTC").
-	// adjustWidths applies this only to 24-hour hour letters.
-	if o.Hour == "numeric" && o.TimeZoneName != "" && o.Second == "" {
-		c.zoneNoSecPad = true
 	}
 
 	// Component options -> build skeleton, best-match against availableFormats.
