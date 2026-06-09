@@ -17,6 +17,8 @@ package datetime
 import (
 	"strings"
 	"time"
+
+	"github.com/hakastein/gocldr/datetime/internal/data"
 )
 
 // The generator reads its CLDR input base from the CLDR_DATA environment
@@ -50,67 +52,17 @@ type Options struct {
 	TimeZone               string // IANA name; defaults to local
 }
 
-// localeData holds the resolved CLDR symbol tables and patterns for one locale.
-// The concrete values are emitted into tables_gen.go by the generator.
-type localeData struct {
-	MonthsFormat map[string][]string
-	MonthsStand  map[string][]string
-	DaysFormat   map[string][]string
-	DaysStand    map[string][]string
-	QuartersFmt  map[string][]string
-	QuartersStd  map[string][]string
-
-	DayPeriodsFmt map[string]map[string]string
-	DayPeriodsStd map[string]map[string]string
-	Eras          map[string][]string
-
-	DateFormats map[string]string
-	TimeFormats map[string]string
-	DateTime    map[string]string
-	AtTime      map[string]string
-	Available   map[string]string
-
-	NumberingSystem string
-	Zones           map[string]string
-
-	// DayPeriodRules maps a flexible day-period key (morning1, afternoon1,
-	// evening1, night1, noon, midnight) to its time range. For a half-open
-	// range [from,before) the value is {from, before}; for an exact-point rule
-	// (_at, used by noon/midnight) from==before==the point. Times are minutes
-	// since 00:00 (0..1440). A range may wrap past midnight (from > before).
-	DayPeriodRules map[string][2]int
-
-	// MetazoneNames maps a CLDR metazone id (e.g. "America_Eastern") to its
-	// localized names, keyed "<width>.<type>" where width is long|short and
-	// type is generic|standard|daylight (e.g. "long.daylight"). Only the
-	// sub-keys present in CLDR are emitted.
-	MetazoneNames map[string]map[string]string
-
-	// ZoneOverrides maps a CLDR zone id (legacy IANA key, '/'-joined, e.g.
-	// "Europe/London") to per-zone name overrides, same "<width>.<type>" keys
-	// as MetazoneNames. These take priority over the metazone names.
-	ZoneOverrides map[string]map[string]string
-
-	// ExemplarCities maps a CLDR zone id to its localized exemplar city
-	// (feeds the regionFormat location fallback for generic names).
-	ExemplarCities map[string]string
-
-	// TerritoryNames maps a territory code (e.g. "GB") to its localized display
-	// name, limited to the country-representative territories. Used by the
-	// generic-location format ("United Kingdom Time").
-	TerritoryNames map[string]string
-}
-
-// resolveLocale walks the CLDR fallback chain to find a locale present in the
-// generated table: exact id -> explicit parentLocale -> truncate trailing
-// subtag -> "en" as the ultimate root substitute.
-func resolveLocale(locale string) (*localeData, string) {
+// resolveLocale walks the CLDR fallback chain to find a locale registered in
+// the locale-data registry: exact id -> explicit parentLocale -> truncate
+// trailing subtag -> "en" as the ultimate root substitute. Locale data is
+// populated by the imported gocldr/datetime/locales/* packages.
+func resolveLocale(locale string) (*data.LocaleData, string) {
 	cur := normalizeLocale(locale)
 	seen := map[string]bool{}
 	for cur != "" && cur != "und" && !seen[cur] {
 		seen[cur] = true
-		if idx, ok := localeIndex[cur]; ok {
-			return &localeBlobs[idx], cur
+		if ld, ok := data.Lookup(cur); ok {
+			return ld, cur
 		}
 		if p, ok := parentLocaleMap[cur]; ok {
 			cur = p
@@ -123,8 +75,8 @@ func resolveLocale(locale string) (*localeData, string) {
 		break
 	}
 	// ultimate fallback
-	if idx, ok := localeIndex["en"]; ok {
-		return &localeBlobs[idx], "en"
+	if ld, ok := data.Lookup("en"); ok {
+		return ld, "en"
 	}
 	return nil, ""
 }

@@ -4,11 +4,13 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/hakastein/gocldr/datetime/internal/data"
 )
 
 // formatCtx carries the resolved locale data and options through formatting.
 type formatCtx struct {
-	ld     *localeData
+	ld     *data.LocaleData
 	locale string
 	digits []rune
 	opts   Options

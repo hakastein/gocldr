@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/hakastein/gocldr/datetime"
+	_ "github.com/hakastein/gocldr/datetime/locales/all"
 )
 
 // jsCase mirrors one entry of testdata/intl_dates.json.
