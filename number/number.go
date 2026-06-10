@@ -41,8 +41,10 @@ type Options struct {
 	// minimumGroupingDigits).
 	UseGrouping *bool
 	// UseGroupingMode optionally selects Intl's string grouping semantics:
-	// "always", "auto", "min2" or "false". It takes precedence over
-	// UseGrouping when non-empty.
+	// "always", "auto" or "min2". It takes precedence over UseGrouping when
+	// non-empty. Per ECMA-402 the STRING forms "true" and "false" are legacy
+	// aliases of the default "auto" — only the boolean false (UseGrouping)
+	// disables grouping. Unrecognised values fall back to UseGrouping.
 	UseGroupingMode string
 
 	MinimumIntegerDigits     *int
@@ -400,17 +402,17 @@ const (
 )
 
 func groupingMode(o *Options) groupMode {
-	if o.UseGroupingMode != "" {
-		switch o.UseGroupingMode {
-		case "always", "true":
-			return groupAlways
-		case "min2":
-			return groupMin2
-		case "false":
-			return groupOff
-		case "auto":
-			return groupAuto
-		}
+	switch o.UseGroupingMode {
+	case "always":
+		return groupAlways
+	case "min2":
+		return groupMin2
+	case "auto", "true", "false":
+		// ECMA-402 quirk: the string forms "true" and "false" are legacy
+		// aliases for the default "auto" — Intl.NumberFormat('en',
+		// {useGrouping:'false'}) still groups; only the BOOLEAN false
+		// disables grouping.
+		return groupAuto
 	}
 	if o.UseGrouping != nil {
 		if *o.UseGrouping {

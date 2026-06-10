@@ -22,29 +22,42 @@ type fixture struct {
 }
 
 type rawOptions struct {
-	Style                    string `json:"style"`
-	Currency                 string `json:"currency"`
-	CurrencyDisplay          string `json:"currencyDisplay"`
-	UseGrouping              *bool  `json:"useGrouping"`
-	MinimumIntegerDigits     *int   `json:"minimumIntegerDigits"`
-	MinimumFractionDigits    *int   `json:"minimumFractionDigits"`
-	MaximumFractionDigits    *int   `json:"maximumFractionDigits"`
-	MinimumSignificantDigits *int   `json:"minimumSignificantDigits"`
-	MaximumSignificantDigits *int   `json:"maximumSignificantDigits"`
+	Style           string `json:"style"`
+	Currency        string `json:"currency"`
+	CurrencyDisplay string `json:"currencyDisplay"`
+	// useGrouping arrives either as a JSON bool (the legacy Intl form) or as
+	// an ES2023 string ("always"/"auto"/"min2"/legacy "true"/"false").
+	UseGrouping              json.RawMessage `json:"useGrouping"`
+	MinimumIntegerDigits     *int            `json:"minimumIntegerDigits"`
+	MinimumFractionDigits    *int            `json:"minimumFractionDigits"`
+	MaximumFractionDigits    *int            `json:"maximumFractionDigits"`
+	MinimumSignificantDigits *int            `json:"minimumSignificantDigits"`
+	MaximumSignificantDigits *int            `json:"maximumSignificantDigits"`
 }
 
 func (r rawOptions) toOptions() number.Options {
-	return number.Options{
+	o := number.Options{
 		Style:                    r.Style,
 		Currency:                 r.Currency,
 		CurrencyDisplay:          r.CurrencyDisplay,
-		UseGrouping:              r.UseGrouping,
 		MinimumIntegerDigits:     r.MinimumIntegerDigits,
 		MinimumFractionDigits:    r.MinimumFractionDigits,
 		MaximumFractionDigits:    r.MaximumFractionDigits,
 		MinimumSignificantDigits: r.MinimumSignificantDigits,
 		MaximumSignificantDigits: r.MaximumSignificantDigits,
 	}
+	if len(r.UseGrouping) > 0 {
+		var b bool
+		if err := json.Unmarshal(r.UseGrouping, &b); err == nil {
+			o.UseGrouping = &b
+		} else {
+			var s string
+			if err := json.Unmarshal(r.UseGrouping, &s); err == nil {
+				o.UseGroupingMode = s
+			}
+		}
+	}
+	return o
 }
 
 func loadFixtures(t *testing.T) []fixture {
