@@ -101,7 +101,8 @@ import (
 > `all` only in tests or tooling, never as a convenience default in a service.
 
 If a requested locale is not registered, the formatters fall back through the
-CLDR parent chain to the root rather than failing.
+CLDR parent chain rather than failing (`number` ends at root data, `datetime`
+at `en`; see [ARCHITECTURE.md](ARCHITECTURE.md) for the exact chains).
 
 ## Packages
 
@@ -113,11 +114,15 @@ CLDR parent chain to the root rather than failing.
 
 ## Correctness
 
-Behavior matches the ECMA-402 `Intl.*` specification. The `number` and `datetime`
-formatters are checked against Node `Intl.*` golden fixtures, and the `plural`
-rules against CLDR sample data — all via `go test ./...`. The bundled tables and
-the fixtures are generated from the **same pinned CLDR release**, so they agree by
-construction. See [ARCHITECTURE.md](ARCHITECTURE.md).
+Behavior matches the ECMA-402 `Intl.*` specification. All three packages are
+checked row-exact against golden fixtures captured from Node's `Intl.*` (an
+independent ICU implementation): `Intl.NumberFormat`, `Intl.DateTimeFormat`
+and `Intl.PluralRules` output respectively — all via `go test ./...`. The only
+tolerated divergence is an explicit, test-enforced skip list (currently fa/th,
+whose default calendars are non-Gregorian); `plural` additionally round-trips
+CLDR's own rule samples. The bundled tables and the fixtures are generated
+from the **same pinned CLDR release**, so they agree by construction. See
+[ARCHITECTURE.md](ARCHITECTURE.md).
 
 This codebase is LLM-generated; the guard is verification, not authorship. Trust
 the tests over the prose.
@@ -170,7 +175,7 @@ invested in that ecosystem and need neither date/time formatting nor strict
 
 ## Supported locales
 
-All 726 CLDR locales, including region and script variants (`en-GB`, `zh-Hans`,
+All 725 CLDR locales, including region and script variants (`en-GB`, `zh-Hans`,
 `pt-BR`, …). Data is regenerated from the pinned CLDR release with `make gen`.
 
 ## Documentation
