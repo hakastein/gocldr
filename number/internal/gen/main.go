@@ -21,7 +21,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"go/format"
 	"log"
 	"os"
 	"path/filepath"
@@ -88,32 +87,13 @@ func (g *generator) run(out string) {
 	g.localeEntries = map[string]*localeEntry{}
 	g.currencyDisplay = map[string]map[string]displayCurrency{}
 
-	g.loadNumberingSystems()
+	g.numberingSystems = cldr.LoadNumberingSystems(filepath.Join(g.cldr, "cldr-core", "supplemental", "numberingSystems.json"))
 	g.loadCurrencyDigits()
-	g.loadParentLocales()
+	g.parentLocales = cldr.LoadParentLocales(filepath.Join(g.cldr, "cldr-core", "supplemental", "parentLocales.json"))
 	g.loadLocales()
 	g.resolveCurrencies()
 
 	g.emit(out)
-}
-
-func (g *generator) loadNumberingSystems() {
-	path := filepath.Join(g.cldr, "cldr-core", "supplemental", "numberingSystems.json")
-	var doc struct {
-		Supplemental struct {
-			NumberingSystems map[string]struct {
-				Type   string `json:"_type"`
-				Digits string `json:"_digits"`
-			} `json:"numberingSystems"`
-		} `json:"supplemental"`
-	}
-	mustJSON(path, &doc)
-	g.numberingSystems = map[string]string{}
-	for name, ns := range doc.Supplemental.NumberingSystems {
-		if ns.Type == "numeric" && ns.Digits != "" {
-			g.numberingSystems[name] = ns.Digits
-		}
-	}
 }
 
 func (g *generator) loadCurrencyDigits() {
@@ -127,7 +107,7 @@ func (g *generator) loadCurrencyDigits() {
 			} `json:"currencyData"`
 		} `json:"supplemental"`
 	}
-	mustJSON(path, &doc)
+	cldr.MustJSON(path, &doc)
 	g.currencyDigits = map[string]int{}
 	for code, fr := range doc.Supplemental.CurrencyData.Fractions {
 		if code == "DEFAULT" {
@@ -139,19 +119,6 @@ func (g *generator) loadCurrencyDigits() {
 			}
 		}
 	}
-}
-
-func (g *generator) loadParentLocales() {
-	path := filepath.Join(g.cldr, "cldr-core", "supplemental", "parentLocales.json")
-	var doc struct {
-		Supplemental struct {
-			ParentLocales struct {
-				ParentLocale map[string]string `json:"parentLocale"`
-			} `json:"parentLocales"`
-		} `json:"supplemental"`
-	}
-	mustJSON(path, &doc)
-	g.parentLocales = doc.Supplemental.ParentLocales.ParentLocale
 }
 
 func (g *generator) loadLocales() {
@@ -437,7 +404,7 @@ func (g *generator) emit(out string) {
 	// numbering systems digit map.
 	p("// numberingSystems maps a numbering system id to its 10 digit glyphs.\n")
 	p("var numberingSystems = map[string]string{\n")
-	for _, k := range sortedKeys(g.numberingSystems) {
+	for _, k := range cldr.SortedKeys(g.numberingSystems) {
 		p("\t%s: %s,\n", q(k), q(g.numberingSystems[k]))
 	}
 	p("}\n\n")
@@ -446,7 +413,7 @@ func (g *generator) emit(out string) {
 	p("// currencyDigits maps an ISO 4217 code to its CLDR default fraction digits.\n")
 	p("// Codes absent here use defaultCurrencyDigits (2).\n")
 	p("var currencyDigits = map[string]int8{\n")
-	for _, k := range sortedKeys(g.currencyDigits) {
+	for _, k := range cldr.SortedKeys(g.currencyDigits) {
 		p("\t%s: %d,\n", q(k), g.currencyDigits[k])
 	}
 	p("}\n\n")
@@ -454,12 +421,12 @@ func (g *generator) emit(out string) {
 	// parent locales.
 	p("// parentLocales is the CLDR parentLocale override map for fallback.\n")
 	p("var parentLocales = map[string]string{\n")
-	for _, k := range sortedKeys(g.parentLocales) {
+	for _, k := range cldr.SortedKeys(g.parentLocales) {
 		p("\t%s: %s,\n", q(k), q(g.parentLocales[k]))
 	}
 	p("}\n")
 
-	if err := writeFormatted(out, b.Bytes()); err != nil {
+	if err := cldr.WriteFormatted(out, b.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 
@@ -468,7 +435,7 @@ func (g *generator) emit(out string) {
 	// //go:generate working directory).
 	localesDir := filepath.Join(filepath.Dir(out), "locales")
 
-	locKeys := sortedKeys(g.localeEntries)
+	locKeys := cldr.SortedKeys(g.localeEntries)
 
 	// One self-registering package per locale: locales/<tag>/data_gen.go.
 	for _, loc := range locKeys {
@@ -488,7 +455,7 @@ func (g *generator) emit(out string) {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Fatal(err)
 		}
-		if err := writeFormatted(filepath.Join(dir, "data_gen.go"), lb.Bytes()); err != nil {
+		if err := cldr.WriteFormatted(filepath.Join(dir, "data_gen.go"), lb.Bytes()); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -510,7 +477,7 @@ func (g *generator) emit(out string) {
 	if err := os.MkdirAll(allDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	if err := writeFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
+	if err := cldr.WriteFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 
@@ -537,20 +504,9 @@ func writeLocaleData(buf *bytes.Buffer, e *localeEntry) {
 	if e.spacingAfter != "" {
 		buf.WriteString(fmt.Sprintf("SpacingAfter: %s, ", q(e.spacingAfter)))
 	}
-	writeStrMap(buf, "UnitPatterns", e.unitPatterns)
+	cldr.WriteStrMap(buf, "UnitPatterns", e.unitPatterns)
 	writeCurrencies(buf, e.currencies)
 	buf.WriteString("}")
-}
-
-func writeStrMap(buf *bytes.Buffer, field string, m map[string]string) {
-	if len(m) == 0 {
-		return
-	}
-	buf.WriteString(field + ": map[string]string{")
-	for _, k := range sortedKeys(m) {
-		buf.WriteString(fmt.Sprintf("%s: %s, ", q(k), q(m[k])))
-	}
-	buf.WriteString("}, ")
 }
 
 func writeCurrencies(buf *bytes.Buffer, m map[string]displayCurrency) {
@@ -569,7 +525,7 @@ func writeCurrencies(buf *bytes.Buffer, m map[string]displayCurrency) {
 		buf.WriteString(fmt.Sprintf("Symbol: %s, Narrow: %s", q(dc.symbol), q(dc.narrow)))
 		if len(dc.names) > 0 {
 			buf.WriteString(", Names: map[string]string{")
-			for _, nk := range sortedKeys(dc.names) {
+			for _, nk := range cldr.SortedKeys(dc.names) {
 				buf.WriteString(fmt.Sprintf("%s: %s, ", q(nk), q(dc.names[nk])))
 			}
 			buf.WriteString("}")
@@ -580,27 +536,6 @@ func writeCurrencies(buf *bytes.Buffer, m map[string]displayCurrency) {
 }
 
 // ---- helpers ----
-
-// writeFormatted runs src through gofmt and writes it to path, dumping a
-// .broken sibling on a gofmt failure for debugging.
-func writeFormatted(path string, src []byte) error {
-	formatted, err := format.Source(src)
-	if err != nil {
-		_ = os.WriteFile(path+".broken", src, 0o644)
-		return fmt.Errorf("gofmt failed for %s: %w (wrote %s.broken)", path, err, path)
-	}
-	return os.WriteFile(path, formatted, 0o644)
-}
-
-func mustJSON(path string, v any) {
-	raw, err := os.ReadFile(path)
-	if err != nil {
-		log.Fatalf("gen: read %s: %v", path, err)
-	}
-	if err := json.Unmarshal(raw, v); err != nil {
-		log.Fatalf("gen: parse %s: %v", path, err)
-	}
-}
 
 func jsonString(raw json.RawMessage) string {
 	if raw == nil {
@@ -614,14 +549,3 @@ func jsonString(raw json.RawMessage) string {
 }
 
 func q(s string) string { return strconv.Quote(s) }
-
-// sortedKeys returns the keys of m in ascending order. Generated output is
-// emitted in this order so it stays stable across Go's randomized map iteration.
-func sortedKeys[V any](m map[string]V) []string {
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	return keys
-}
