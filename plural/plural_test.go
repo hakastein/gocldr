@@ -1,6 +1,7 @@
 package plural_test
 
 import (
+	"math"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -37,6 +38,57 @@ func TestOperandsFromString(t *testing.T) {
 	}
 }
 
+// TestOperandsFromStringErrors pins the error contract: malformed input must
+// return an error and zero operands instead of silently classifying garbage.
+func TestOperandsFromStringErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+	}{
+		{"empty", ""},
+		{"letters", "abc"},
+		{"double dot", "1.2.3"},
+		{"comma decimal", "1,5"},
+		{"sign only", "-"},
+		{"dot only", "."},
+		{"exponent without digits", "c5"},
+		{"dangling exponent", "1e"},
+		{"fractional exponent", "1e1.5"},
+		{"double sign", "+-1"},
+		{"integer part overflows int64", "9223372036854775808"},
+		{"fraction part overflows int64", "0.99999999999999999999"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := plural.OperandsFromString(tc.in)
+			require.Error(t, err)
+			assert.Zero(t, got)
+		})
+	}
+}
+
+// TestOperandsFromStringLenientForms pins the deliberately accepted edge
+// forms of the syntax.
+func TestOperandsFromStringLenientForms(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want plural.Operands
+	}{
+		{"plus sign", "+2", plural.Operands{N: 2, I: 2}},
+		{"fraction only", ".5", plural.Operands{N: 0.5, V: 1, W: 1, F: 5, T: 5}},
+		{"trailing dot", "5.", plural.Operands{N: 5, I: 5}},
+		{"uppercase exponent", "1.2E6", plural.Operands{N: 1200000, I: 1200000, C: 6}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := plural.OperandsFromString(tc.in)
+			require.NoError(t, err)
+			assert.Equal(t, tc.want, got)
+		})
+	}
+}
+
 func TestNewOperands(t *testing.T) {
 	tests := []struct {
 		name       string
@@ -63,6 +115,72 @@ func TestNewOperands(t *testing.T) {
 			assert.Equal(t, tc.wantF, o.F, "F")
 			assert.Equal(t, tc.wantT, o.T, "T")
 		})
+	}
+}
+
+// TestNewOperandsEdgeInputs covers out-of-range fraction-digit arguments
+// (clamped, mirroring the formatter's no-panic stance) and non-finite values
+// (operands carry N alone; every locale classifies them as Other).
+func TestNewOperandsEdgeInputs(t *testing.T) {
+	t.Run("negative bounds clamp to zero", func(t *testing.T) {
+		o := plural.NewOperands(1.5, -3, -3)
+		// minFrac -3 -> 0, maxFrac raised to minFrac: 1.5 rounds half-away to 2.
+		assert.Equal(t, plural.Operands{N: 2, I: 2}, o)
+	})
+	t.Run("maxFrac below minFrac is raised", func(t *testing.T) {
+		o := plural.NewOperands(1.5, 3, 1)
+		assert.Equal(t, plural.Operands{N: 1.5, I: 1, V: 3, W: 1, F: 500, T: 5}, o)
+	})
+	t.Run("NaN", func(t *testing.T) {
+		o := plural.NewOperands(math.NaN(), 0, 0)
+		assert.True(t, math.IsNaN(o.N))
+		assert.Equal(t, plural.Other, plural.CardinalFor("en", math.NaN(), 0, 0))
+	})
+	t.Run("infinity", func(t *testing.T) {
+		o := plural.NewOperands(math.Inf(-1), 0, 0)
+		assert.True(t, math.IsInf(o.N, 1), "operands are defined on the absolute value")
+		assert.Equal(t, plural.Other, plural.CardinalFor("en", math.Inf(1), 0, 0))
+	})
+}
+
+// TestLocaleLookupRobustness pins lookup behavior for garbage and sloppy
+// locale tags: unresolvable input degrades to Other without panicking, while
+// case/underscore/trailing-separator sloppiness still resolves.
+func TestLocaleLookupRobustness(t *testing.T) {
+	one := plural.Operands{N: 1, I: 1}
+	tests := []struct {
+		name   string
+		locale string
+		want   plural.Category
+	}{
+		{"empty", "", plural.Other},
+		{"punctuation", "!!!", plural.Other},
+		{"dashes only", "----", plural.Other},
+		{"trailing dash resolves by truncation", "en-", plural.One},
+		{"mixed case and underscore", "EN_us", plural.One},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, plural.Cardinal(tc.locale, one))
+		})
+	}
+}
+
+// TestEnglishOrdinal covers the ordinal rule set (distinct from cardinal):
+// 1st/21st -> one, 2nd/22nd -> two, 3rd/23rd -> few, teens and the rest ->
+// other, per CLDR.
+func TestEnglishOrdinal(t *testing.T) {
+	tests := []struct {
+		n    float64
+		want plural.Category
+	}{
+		{1, plural.One}, {21, plural.One}, {101, plural.One},
+		{2, plural.Two}, {22, plural.Two},
+		{3, plural.Few}, {23, plural.Few},
+		{4, plural.Other}, {11, plural.Other}, {12, plural.Other}, {13, plural.Other},
+	}
+	for _, tc := range tests {
+		assert.Equalf(t, tc.want, plural.OrdinalFor("en", tc.n, 0, 0), "n=%v", tc.n)
 	}
 }
 
