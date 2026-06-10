@@ -459,8 +459,8 @@ func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, style
 
 	out := minus + prefix + body + suffix
 
-	// Symbol substitutions in prefix/suffix: percent sign, minus, plus.
-	out = substituteSymbols(ld, out)
+	// The '%' literal in a pattern maps to the locale percentSign.
+	out = strings.ReplaceAll(out, "%", ld.Sym.Percent)
 
 	// Currency handling.
 	if style == "currency" {
@@ -476,16 +476,6 @@ func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, style
 		out = substituteDigits(out, ld.Digits)
 	}
 	return out
-}
-
-// substituteSymbols replaces the literal pattern symbols (% and the ASCII
-// minus produced for negatives) with the locale's symbols. The '%' in a pattern
-// maps to the locale percentSign.
-func substituteSymbols(ld *data.LocaleData, s string) string {
-	if strings.IndexByte(s, '%') >= 0 {
-		s = strings.ReplaceAll(s, "%", ld.Sym.Percent)
-	}
-	return s
 }
 
 // substituteDigits maps ASCII digits 0-9 to the numbering system's digit runes.
@@ -540,12 +530,12 @@ func insertCurrencySymbol(ld *data.LocaleData, s string, cur currencyInfo, displ
 	// bordering char is not a symbol/separator, insert the locale's
 	// insertBetween (typically a NBSP / space).
 	if symbolBefore {
-		if needSpaceAfterSymbol(symbol, after, ld) {
+		if symbol != "" && needCurrencySpacing(lastRune(symbol), firstRune(after)) {
 			return before + symbol + ld.SpacingBefore + after
 		}
 		return before + symbol + after
 	}
-	if needSpaceBeforeSymbol(symbol, before, ld) {
+	if symbol != "" && needCurrencySpacing(firstRune(symbol), lastRune(before)) {
 		return before + ld.SpacingAfter + symbol + after
 	}
 	return before + symbol + after
@@ -562,36 +552,19 @@ func containsASCIIDigit(s string) bool {
 	return false
 }
 
-// needSpaceAfterSymbol implements the beforeCurrency spacing rule: insert a
-// space when the symbol ends with a letter/digit (not a symbol/space) and the
-// following text starts with a digit.
-func needSpaceAfterSymbol(symbol, after string, ld *data.LocaleData) bool {
-	if symbol == "" || after == "" {
-		return false
-	}
-	last := lastRune(symbol)
-	first := firstRune(after)
-	if isSymbolOrSpace(last) {
-		return false
-	}
-	return first >= '0' && first <= '9'
+// needCurrencySpacing implements the CLDR currencySpacing rule used here:
+// the locale separator is inserted when the symbol's rune facing the number
+// is not itself a symbol or space and the number side borders it with a
+// digit. Callers pass the two edge runes that end up adjacent.
+func needCurrencySpacing(symbolEdge, numberEdge rune) bool {
+	return !isSymbolOrSpace(symbolEdge) && numberEdge >= '0' && numberEdge <= '9'
 }
 
-func needSpaceBeforeSymbol(symbol, before string, ld *data.LocaleData) bool {
-	if symbol == "" || before == "" {
-		return false
-	}
-	first := firstRune(symbol)
-	last := lastRune(before)
-	if isSymbolOrSpace(first) {
-		return false
-	}
-	return last >= '0' && last <= '9'
-}
-
+// isSymbolOrSpace reports whether r is a symbol, any Unicode separator, or a
+// bidi mark (LRM \u200e / RLM \u200f) — runes that already separate the
+// currency symbol from the digits, so no extra spacing is needed.
 func isSymbolOrSpace(r rune) bool {
-	switch r {
-	case ' ', ' ', ' ', '‎', '‏':
+	if r == '\u200e' || r == '\u200f' {
 		return true
 	}
 	return unicode.IsSymbol(r) || unicode.In(r, unicode.Z)
