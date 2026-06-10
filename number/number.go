@@ -64,10 +64,8 @@ func Format(locale string, value float64, opts Options) string {
 
 	// Resolve currency metadata up front (needed for default fraction digits).
 	var cur currencyInfo
-	haveCur := false
 	if style == "currency" {
 		cur = resolveCurrency(ld, opts.Currency)
-		haveCur = true
 	}
 
 	// Handle non-finite values the way Intl does.
@@ -97,7 +95,7 @@ func Format(locale string, value float64, opts Options) string {
 	}
 
 	// Resolve digit-count options into concrete values.
-	rs := resolveRounding(style, &opts, haveCur, cur)
+	rs := resolveRounding(style, &opts, cur)
 
 	// Percent multiplies by 100.
 	scaled := value
@@ -145,7 +143,11 @@ type roundSpec struct {
 	useSig bool
 }
 
-func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) roundSpec {
+// resolveRounding turns the digit-count options into concrete constraints.
+// style selects the fraction-digit defaults; cur supplies the per-currency
+// default digits and is only consulted when style is "currency" (Format always
+// resolves it for that style).
+func resolveRounding(style string, o *Options, cur currencyInfo) roundSpec {
 	rs := roundSpec{minInt: 1}
 	if o.MinimumIntegerDigits != nil {
 		rs.minInt = clampInt(*o.MinimumIntegerDigits, 1, 21)
@@ -176,11 +178,7 @@ func resolveRounding(style string, o *Options, haveCur bool, cur currencyInfo) r
 	case "percent":
 		defMin, defMax = 0, 0
 	case "currency":
-		d := 2
-		if haveCur {
-			d = cur.digits
-		}
-		defMin, defMax = d, d
+		defMin, defMax = cur.digits, cur.digits
 	}
 
 	rs.minFr = defMin
