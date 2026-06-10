@@ -53,18 +53,7 @@ func (c *formatCtx) num(v, minWidth int) string {
 	if len(s) < minWidth {
 		s = strings.Repeat("0", minWidth-len(s)) + s
 	}
-	if len(c.digits) != 10 || (c.digits[0] == '0' && c.digits[9] == '9') {
-		return s
-	}
-	var b strings.Builder
-	for _, ch := range s {
-		if ch >= '0' && ch <= '9' {
-			b.WriteRune(c.digits[ch-'0'])
-		} else {
-			b.WriteRune(ch)
-		}
-	}
-	return b.String()
+	return c.localizeDigits(s)
 }
 
 // interpret runs the CLDR pattern over t, emitting localized text.
@@ -450,17 +439,7 @@ func (c *formatCtx) fraction(count int, t time.Time) string {
 	if count > 9 {
 		full += strings.Repeat("0", count-9)
 	}
-	frac := full[:count]
-	// localize digits
-	var b strings.Builder
-	for _, ch := range frac {
-		if len(c.digits) == 10 && ch >= '0' && ch <= '9' {
-			b.WriteRune(c.digits[ch-'0'])
-		} else {
-			b.WriteRune(ch)
-		}
-	}
-	return b.String()
+	return c.localizeDigits(full[:count])
 }
 
 // zone renders a time zone field. For UTC it uses the CLDR zone names; for
