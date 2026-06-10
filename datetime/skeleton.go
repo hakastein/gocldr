@@ -504,10 +504,7 @@ func (c *formatCtx) bestMatch(skel string) string {
 	sort.Strings(keys)
 	for _, k := range keys {
 		have := parseSkeleton(k)
-		score, ok := matchScore(want, have)
-		if !ok {
-			continue
-		}
+		score := matchScore(want, have)
 		if best == nil || score < best.score {
 			cp := cand{key: k, pat: avail[k], score: score}
 			best = &cp
@@ -522,10 +519,10 @@ func (c *formatCtx) bestMatch(skel string) string {
 	return c.synthesize(want)
 }
 
-// matchScore returns a distance between requested and candidate field sets.
-// A candidate is only eligible if it does not contain fields absent from the
-// request beyond an allowed tolerance, mirroring ICU's penalty model.
-func matchScore(want, have map[rune]skelField) (int, bool) {
+// matchScore returns a distance between requested and candidate field sets,
+// mirroring ICU's penalty model: missing or extra fields cost far more than
+// width differences, so a structurally closer candidate always wins.
+func matchScore(want, have map[rune]skelField) int {
 	score := 0
 	// Penalize missing requested fields heavily.
 	for cls, wf := range want {
@@ -555,7 +552,7 @@ func matchScore(want, have map[rune]skelField) (int, bool) {
 			score += 1000
 		}
 	}
-	return score, true
+	return score
 }
 
 func hourIs12(letter rune) bool {
@@ -797,11 +794,7 @@ func (c *formatCtx) matchPortion(skel string, want map[rune]skelField) string {
 	sort.Strings(keys)
 	for _, k := range keys {
 		have := parseSkeleton(k)
-		sc, ok := matchScore(wantP, have)
-		if !ok {
-			continue
-		}
-		if sc < bestScore {
+		if sc := matchScore(wantP, have); sc < bestScore {
 			bestScore = sc
 			best = avail[k]
 		}
