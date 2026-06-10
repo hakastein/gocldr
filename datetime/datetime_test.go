@@ -88,28 +88,15 @@ var skipLocales = map[string]string{
 	"th": "Buddhist (non-Gregorian) default calendar not implemented",
 }
 
-// skipBuckets lists individual locale|tag fixture buckets with known, open
-// divergences from Intl. Each entry is a real formatting bug, not an accepted
-// difference: the staleness guard in TestIntlParity fails as soon as a fix
-// lands, forcing the entry to be removed.
-var skipBuckets = map[string]string{
-	"da|comp:wymd-long":   "best-fit drops the 'den' literal of yMMMMEEEEd",
-	"da|comp:wymdhm-long": "best-fit drops the 'den' literal of yMMMMEEEEd",
-	"ja|comp:hms-tzlong":  "time+zone synthesis loses the locale's Hms literals",
-	"ko|comp:hms-tzlong":  "time+zone synthesis loses the locale's Hms literals",
-	"ko|comp:hms-tzshort": "time+zone synthesis loses the locale's Hms literals",
-}
-
 // TestIntlParity asserts EVERY golden fixture row against the captured
-// Intl.DateTimeFormat output, except the rows enumerated in skipLocales /
-// skipBuckets above. `make gen` pins both the Go tables and the Node golden
-// fixtures to the same CLDR release, so there is no CLDR-version skew. Skips
-// are pinned in both directions: a skip entry whose rows all match means the
-// divergence was fixed, and the entry must be deleted.
+// Intl.DateTimeFormat output, except the locales enumerated in skipLocales
+// above. `make gen` pins both the Go tables and the Node golden fixtures to
+// the same CLDR release, so there is no CLDR-version skew. Skips are pinned in
+// both directions: a skip entry whose rows all match means the divergence was
+// fixed, and the entry must be deleted.
 func TestIntlParity(t *testing.T) {
 	cases := loadCases(t)
 	missByLocale := map[string]int{}
-	missByBucket := map[string]int{}
 	for _, c := range cases {
 		got := datetime.Format(c.Locale, time.UnixMilli(c.MS).UTC(), toOptions(c.Opts))
 		if _, ok := skipLocales[c.Locale]; ok {
@@ -118,22 +105,11 @@ func TestIntlParity(t *testing.T) {
 			}
 			continue
 		}
-		bucket := c.Locale + "|" + c.Tag
-		if _, ok := skipBuckets[bucket]; ok {
-			if got != c.Value {
-				missByBucket[bucket]++
-			}
-			continue
-		}
 		assert.Equalf(t, c.Value, got, "[%s %s] opts=%v ms=%d", c.Locale, c.Tag, c.Opts, c.MS)
 	}
 	for loc := range skipLocales {
 		assert.Positivef(t, missByLocale[loc],
 			"skipLocales[%q] is stale: every fixture row matches Intl now — remove the entry", loc)
-	}
-	for b := range skipBuckets {
-		assert.Positivef(t, missByBucket[b],
-			"skipBuckets[%q] is stale: every fixture row matches Intl now — remove the entry", b)
 	}
 }
 
