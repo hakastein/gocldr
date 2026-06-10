@@ -4,8 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -70,25 +68,6 @@ func toOptions(m map[string]any) datetime.Options {
 	return o
 }
 
-// category groups a case tag into a reporting bucket.
-func category(tag string) string {
-	switch {
-	case strings.HasPrefix(tag, "dateStyle:"):
-		return "dateStyle"
-	case strings.HasPrefix(tag, "timeStyle:"):
-		return "timeStyle"
-	case strings.HasPrefix(tag, "both:"):
-		return "both(date+time)"
-	case strings.HasPrefix(tag, "comp:"):
-		return "component"
-	case strings.HasPrefix(tag, "dp:"):
-		return "dayPeriod"
-	case strings.HasPrefix(tag, "zone:"):
-		return "zone"
-	}
-	return "other"
-}
-
 func loadCases(t *testing.T) []jsCase {
 	t.Helper()
 	data, err := os.ReadFile("testdata/intl_dates.json")
@@ -99,150 +78,62 @@ func loadCases(t *testing.T) []jsCase {
 	return cases
 }
 
-// TestIntlMatch reports the per-category and per-tag match rates against
-// JavaScript's Intl.DateTimeFormat and prints sample divergences. It is a
-// diagnostic breakdown; the gating assertions live in TestThresholds. The
-// overall rate is intentionally below 100% because two matrix locales, fa and
-// th, default to non-Gregorian calendars (Persian, Buddhist) that this package
-// does not implement (for those, the named-zone NAMES still match Intl exactly;
-// only the numeric hour padding differs). `make gen` pins both the Go tables
-// and the Node golden fixtures to the same CLDR release (CLDR 46), so there is
-// no CLDR-version skew.
-func TestIntlMatch(t *testing.T) {
-	cases := loadCases(t)
-
-	type stat struct{ pass, total int }
-	byCat := map[string]*stat{}
-	byTag := map[string]*stat{}
-	// divergence buckets: category -> sample mismatches
-	type miss struct{ locale, tag, got, want string }
-	var misses []miss
-
-	for _, c := range cases {
-		opts := toOptions(c.Opts)
-		tm := time.UnixMilli(c.MS).UTC()
-		got := datetime.Format(c.Locale, tm, opts)
-
-		cat := category(c.Tag)
-		if byCat[cat] == nil {
-			byCat[cat] = &stat{}
-		}
-		if byTag[c.Tag] == nil {
-			byTag[c.Tag] = &stat{}
-		}
-		byCat[cat].total++
-		byTag[c.Tag].total++
-		if got == c.Value {
-			byCat[cat].pass++
-			byTag[c.Tag].pass++
-		} else {
-			misses = append(misses, miss{c.Locale, c.Tag, got, c.Value})
-		}
-	}
-
-	// Report per category.
-	var cats []string
-	for k := range byCat {
-		cats = append(cats, k)
-	}
-	sort.Strings(cats)
-	totalPass, totalAll := 0, 0
-	t.Log("=== Intl match rate by category ===")
-	for _, cat := range cats {
-		s := byCat[cat]
-		totalPass += s.pass
-		totalAll += s.total
-		t.Logf("  %-16s %5d/%-5d  %.1f%%", cat, s.pass, s.total, 100*float64(s.pass)/float64(s.total))
-	}
-	t.Logf("  %-16s %5d/%-5d  %.1f%%", "OVERALL", totalPass, totalAll, 100*float64(totalPass)/float64(totalAll))
-
-	// Per-tag breakdown (helps locate weak component skeletons).
-	var tags []string
-	for k := range byTag {
-		tags = append(tags, k)
-	}
-	sort.Strings(tags)
-	t.Log("=== Intl match rate by tag ===")
-	for _, tag := range tags {
-		s := byTag[tag]
-		if s.pass == s.total {
-			continue
-		}
-		t.Logf("  %-22s %4d/%-4d  %.1f%%", tag, s.pass, s.total, 100*float64(s.pass)/float64(s.total))
-	}
-
-	// Sample divergences, one per (locale,tag) bucket (cap output).
-	t.Log("=== sample divergences (first per locale+tag) ===")
-	seen := map[string]bool{}
-	shown := 0
-	for _, m := range misses {
-		key := m.locale + "|" + m.tag
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		t.Logf("  [%s %s] got=%q want=%q", m.locale, m.tag, m.got, m.want)
-		shown++
-		if shown > 80 {
-			break
-		}
-	}
+// skipLocales lists fixture locales whose Intl default calendar is
+// non-Gregorian (fa: Persian, th: Buddhist). This package implements only the
+// Gregorian calendar, so most of their rows diverge wholesale (year/era/date
+// fields, plus knock-on differences in their calendar-specific available
+// formats). Every other locale is asserted row-exact in TestIntlParity.
+var skipLocales = map[string]string{
+	"fa": "Persian (non-Gregorian) default calendar not implemented",
+	"th": "Buddhist (non-Gregorian) default calendar not implemented",
 }
 
-// TestThresholds asserts a minimum match rate so regressions fail the build.
-// Style-based formats come straight from CLDR patterns and must match almost
-// perfectly; component best-fit is allowed a documented lower bar.
-func TestThresholds(t *testing.T) {
+// skipBuckets lists individual locale|tag fixture buckets with known, open
+// divergences from Intl. Each entry is a real formatting bug, not an accepted
+// difference: the staleness guard in TestIntlParity fails as soon as a fix
+// lands, forcing the entry to be removed.
+var skipBuckets = map[string]string{
+	"da|comp:wymd-long":   "best-fit drops the 'den' literal of yMMMMEEEEd",
+	"da|comp:wymdhm-long": "best-fit drops the 'den' literal of yMMMMEEEEd",
+	"ja|comp:hms-tzlong":  "time+zone synthesis loses the locale's Hms literals",
+	"ko|comp:hms-tzlong":  "time+zone synthesis loses the locale's Hms literals",
+	"ko|comp:hms-tzshort": "time+zone synthesis loses the locale's Hms literals",
+}
+
+// TestIntlParity asserts EVERY golden fixture row against the captured
+// Intl.DateTimeFormat output, except the rows enumerated in skipLocales /
+// skipBuckets above. `make gen` pins both the Go tables and the Node golden
+// fixtures to the same CLDR release, so there is no CLDR-version skew. Skips
+// are pinned in both directions: a skip entry whose rows all match means the
+// divergence was fixed, and the entry must be deleted.
+func TestIntlParity(t *testing.T) {
 	cases := loadCases(t)
-	type stat struct{ pass, total int }
-	byCat := map[string]*stat{}
+	missByLocale := map[string]int{}
+	missByBucket := map[string]int{}
 	for _, c := range cases {
-		opts := toOptions(c.Opts)
-		tm := time.UnixMilli(c.MS).UTC()
-		got := datetime.Format(c.Locale, tm, opts)
-		cat := category(c.Tag)
-		if byCat[cat] == nil {
-			byCat[cat] = &stat{}
+		got := datetime.Format(c.Locale, time.UnixMilli(c.MS).UTC(), toOptions(c.Opts))
+		if _, ok := skipLocales[c.Locale]; ok {
+			if got != c.Value {
+				missByLocale[c.Locale]++
+			}
+			continue
 		}
-		byCat[cat].total++
-		if got == c.Value {
-			byCat[cat].pass++
+		bucket := c.Locale + "|" + c.Tag
+		if _, ok := skipBuckets[bucket]; ok {
+			if got != c.Value {
+				missByBucket[bucket]++
+			}
+			continue
 		}
+		assert.Equalf(t, c.Value, got, "[%s %s] opts=%v ms=%d", c.Locale, c.Tag, c.Opts, c.MS)
 	}
-	// Thresholds are set below the measured rates so genuine regressions fail.
-	// `make gen` pins both the Go tables and the Node golden fixtures to the same
-	// CLDR release (CLDR 46), so there is no CLDR-version skew between them. The
-	// only genuine residual is that two matrix locales (fa, th) default to
-	// non-Gregorian calendars (Persian, Buddhist) which this package does not
-	// implement. Excluding fa/th the overall match rate is ~99%.
-	thresholds := map[string]float64{
-		"dateStyle":       0.90,
-		"timeStyle":       0.99,
-		"both(date+time)": 0.90,
-		"component":       0.90,
-		// dayPeriod: flexible day-period selection from CLDR dayPeriodRules.
-		// Measured ~98.9%; the only residual is th (a Buddhist-calendar locale
-		// this package does not implement, which also drops its "Hm" literal).
-		"dayPeriod": 0.97,
-		// zone: named non-UTC zones — specific (short/long), generic
-		// (short/long, incl. the country/exemplar-city LOCATION format) and the
-		// numeric GMT-offset forms. Excluding the two non-Gregorian-calendar
-		// locales (fa, th) the match rate is 100%; the measured overall is ~97.6%.
-		// The sole residual is that fa/th default to Persian/Buddhist calendars
-		// (not implemented here): the zone NAMES match exactly, only the numeric
-		// hour padding ("04:07" vs "4:07") differs for those two locales. The
-		// threshold sits just below the measured rate so regressions fail.
-		"zone": 0.95,
+	for loc := range skipLocales {
+		assert.Positivef(t, missByLocale[loc],
+			"skipLocales[%q] is stale: every fixture row matches Intl now — remove the entry", loc)
 	}
-	for cat, min := range thresholds {
-		t.Run(cat, func(t *testing.T) {
-			s := byCat[cat]
-			require.NotNilf(t, s, "category %q missing from fixtures", cat)
-			rate := float64(s.pass) / float64(s.total)
-			assert.GreaterOrEqualf(t, rate, min,
-				"category %q match rate %.3f below threshold %.3f (%d/%d)",
-				cat, rate, min, s.pass, s.total)
-		})
+	for b := range skipBuckets {
+		assert.Positivef(t, missByBucket[b],
+			"skipBuckets[%q] is stale: every fixture row matches Intl now — remove the entry", b)
 	}
 }
 
