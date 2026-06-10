@@ -6,21 +6,20 @@
 // sample maps back to its declared category.
 //
 // Usage:
-//   node samples.js <plurals.json> <ordinals.json> <out.json>
+//   node samples.js [<plurals.json> <ordinals.json>]
+//
+// Always writes to plural/testdata/cldr_samples.json relative to this script.
+// Without explicit paths the CLDR inputs derive from $CLDR_DATA (set by the
+// pinned gen image). Run via `make gen`, never on the host; normally invoked
+// through the //go:generate directive in plural.go.
 
 const fs = require('fs');
 const path = require('path');
 
-// Two call forms:
-//   node samples.js <plurals.json> <ordinals.json> <out.json>   (explicit paths)
-//   node samples.js <out.json>                                   (paths from $CLDR_DATA)
-// The second form derives the CLDR paths from $CLDR_DATA (set by the pinned gen
-// image). Run via `make gen`, never on the host.
-let plularsPath, ordinalsPath, outPath;
-if (process.argv.length >= 5) {
+let plularsPath, ordinalsPath;
+if (process.argv.length >= 4) {
   plularsPath = process.argv[2];
   ordinalsPath = process.argv[3];
-  outPath = process.argv[4];
 } else {
   const base = process.env.CLDR_DATA;
   if (!base) {
@@ -29,8 +28,8 @@ if (process.argv.length >= 5) {
   }
   plularsPath = path.join(base, 'cldr-core', 'supplemental', 'plurals.json');
   ordinalsPath = path.join(base, 'cldr-core', 'supplemental', 'ordinals.json');
-  outPath = process.argv[2];
 }
+const outPath = path.join(__dirname, '..', '..', 'testdata', 'cldr_samples.json');
 
 function fracDigits(s) {
   const dot = s.indexOf('.');

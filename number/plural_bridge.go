@@ -28,20 +28,23 @@ func PluralOperands(locale string, value float64, opts Options) plural.Operands 
 	}
 
 	// Resolve digit constraints using decimal-style defaults (see doc comment).
-	o := opts
-	o.Style = ""
-	rs := resolveRounding("decimal", &o, false, currencyInfo{})
+	rs := resolveRounding("decimal", &opts, currencyInfo{})
 
-	intPart, fracPart := formatMagnitude(abs, rs)
-	s := intPart
-	if fracPart != "" {
-		s += "." + fracPart
-	}
-	ops, err := plural.OperandsFromString(s)
+	ops, err := operandsFromDigits(formatMagnitude(abs, rs))
 	if err != nil {
 		return plural.Operands{N: abs}
 	}
 	return ops
+}
+
+// operandsFromDigits derives plural operands from displayed integer and
+// fraction digit strings.
+func operandsFromDigits(intDigits, fracDigits string) (plural.Operands, error) {
+	s := intDigits
+	if fracDigits != "" {
+		s += "." + fracDigits
+	}
+	return plural.OperandsFromString(s)
 }
 
 // CardinalCategory returns the locale's cardinal plural category for value as it
@@ -63,11 +66,7 @@ func OrdinalCategory(locale string, value float64, opts Options) string {
 // currencyDisplay:"name" pattern selection. It reuses the sibling,
 // dependency-free plural package.
 func pluralCategoryForDigits(locale, intDigits, fracDigits string) string {
-	s := intDigits
-	if fracDigits != "" {
-		s += "." + fracDigits
-	}
-	ops, err := plural.OperandsFromString(s)
+	ops, err := operandsFromDigits(intDigits, fracDigits)
 	if err != nil {
 		return "other"
 	}

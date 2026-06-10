@@ -7,10 +7,14 @@
 // "1.0" vs "1"), and the select() call is fed the matching minimum/maximum
 // fraction-digit options so Intl computes the same operands the Go side will.
 //
-// Usage: node intl.js <out.json>
+// Usage: node intl.js
+//   (from any working directory — always writes to
+//    plural/testdata/intl_plurals.json relative to this script; normally
+//    invoked through the //go:generate directive in plural.go)
 
 const fs = require('fs');
-const outPath = process.argv[2];
+const path = require('path');
+const outPath = path.join(__dirname, '..', '..', 'testdata', 'intl_plurals.json');
 
 const locales = [
   'en', 'ru', 'pl', 'ar', 'cy', 'fr', 'ja', 'lt', 'sl', 'he',

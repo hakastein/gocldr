@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Command gen reads the CLDR gregorian calendar data (cldr-dates-full) plus a
 // few supplemental files (cldr-core, cldr-numbers-full) and emits a generated
 // Go source file (tables_gen.go) for package datetime.
@@ -30,7 +28,6 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"go/format"
 	"log"
 	"os"
 	"path/filepath"
@@ -74,8 +71,8 @@ func main() {
 		*bcp47Path = filepath.Join(base, "cldr-bcp47", "bcp47", "timezone.json")
 	}
 
-	numSys := loadNumberingSystems(filepath.Join(*coreDir, "numberingSystems.json"))
-	parents := loadParentLocales(filepath.Join(*coreDir, "parentLocales.json"))
+	numSys := cldr.LoadNumberingSystems(filepath.Join(*coreDir, "numberingSystems.json"))
+	parents := cldr.LoadParentLocales(filepath.Join(*coreDir, "parentLocales.json"))
 	defaultNS, decimalSep := loadNumberFormatInfo(*numbersDir)
 	dpRules := loadDayPeriodRules(filepath.Join(*coreDir, "dayPeriods.json"))
 	zoneMeta := loadMetazoneInfo(filepath.Join(*coreDir, "metaZones.json"))
@@ -197,7 +194,7 @@ func main() {
 	// Write the small shared core table to -out. Per-locale data lives in
 	// self-registering packages under locales/ (see below); this file contains
 	// only the shared core tables (zone maps, metazone coverage, etc.).
-	if err := writeFormatted(*outPath, buf.Bytes()); err != nil {
+	if err := cldr.WriteFormatted(*outPath, buf.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 
@@ -224,7 +221,7 @@ func main() {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Fatal(err)
 		}
-		if err := writeFormatted(filepath.Join(dir, "data_gen.go"), lb.Bytes()); err != nil {
+		if err := cldr.WriteFormatted(filepath.Join(dir, "data_gen.go"), lb.Bytes()); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -251,23 +248,12 @@ func main() {
 	if err := os.MkdirAll(allDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	if err := writeFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
+	if err := cldr.WriteFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 
 	log.Printf("wrote %s + %d locales/<tag>/data_gen.go + locales/all: locales=%d numberingSystems=%d parentLocales=%d",
 		*outPath, len(entries), len(entries), len(numSys), len(parents))
-}
-
-// writeFormatted runs src through gofmt and writes it to path, dumping a
-// .broken sibling on a gofmt failure (mirrors the old single-file behaviour).
-func writeFormatted(path string, src []byte) error {
-	formatted, err := format.Source(src)
-	if err != nil {
-		_ = os.WriteFile(path+".broken", src, 0o644)
-		return fmt.Errorf("gofmt failed for %s: %w (wrote %s.broken)", path, err, path)
-	}
-	return os.WriteFile(path, formatted, 0o644)
 }
 
 // ---- data model emitted into tables_gen.go ----
@@ -322,19 +308,19 @@ func writeLocaleData(buf *bytes.Buffer, d localeData) {
 	writeWidthMap(buf, "QuartersStd", d.QuartersStd)
 	writeStrMapMap(buf, "DayPeriodsFmt", d.DayPeriodsFmt)
 	writeWidthMap(buf, "Eras", d.Eras)
-	writeStrMap(buf, "DateFormats", d.DateFormats)
-	writeStrMap(buf, "TimeFormats", d.TimeFormats)
-	writeStrMap(buf, "DateTime", d.DateTime)
-	writeStrMap(buf, "AtTime", d.AtTime)
-	writeStrMap(buf, "Available", d.Available)
+	cldr.WriteStrMap(buf, "DateFormats", d.DateFormats)
+	cldr.WriteStrMap(buf, "TimeFormats", d.TimeFormats)
+	cldr.WriteStrMap(buf, "DateTime", d.DateTime)
+	cldr.WriteStrMap(buf, "AtTime", d.AtTime)
+	cldr.WriteStrMap(buf, "Available", d.Available)
 	buf.WriteString(fmt.Sprintf("NumberingSystem: %q, ", d.NumberingSystem))
 	buf.WriteString(fmt.Sprintf("DecimalSep: %q, ", d.DecimalSep))
-	writeStrMap(buf, "Zones", d.Zones)
+	cldr.WriteStrMap(buf, "Zones", d.Zones)
 	writeRangeMap(buf, "DayPeriodRules", d.DayPeriodRules)
 	writeStrMapMap(buf, "MetazoneNames", d.MetazoneNames)
 	writeStrMapMap(buf, "ZoneOverrides", d.ZoneOverrides)
-	writeStrMap(buf, "ExemplarCities", d.ExemplarCities)
-	writeStrMap(buf, "TerritoryNames", d.TerritoryNames)
+	cldr.WriteStrMap(buf, "ExemplarCities", d.ExemplarCities)
+	cldr.WriteStrMap(buf, "TerritoryNames", d.TerritoryNames)
 	buf.WriteString("}")
 }
 
@@ -359,7 +345,7 @@ func writeWidthMap(buf *bytes.Buffer, field string, m map[string][]string) {
 		return
 	}
 	buf.WriteString(field + ": map[string][]string{")
-	for _, k := range sortedKeys(m) {
+	for _, k := range cldr.SortedKeys(m) {
 		buf.WriteString(fmt.Sprintf("%q: {", k))
 		for i, v := range m[k] {
 			if i > 0 {
@@ -372,58 +358,20 @@ func writeWidthMap(buf *bytes.Buffer, field string, m map[string][]string) {
 	buf.WriteString("}, ")
 }
 
-func writeStrMap(buf *bytes.Buffer, field string, m map[string]string) {
-	if len(m) == 0 {
-		return
-	}
-	buf.WriteString(field + ": map[string]string{")
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		buf.WriteString(fmt.Sprintf("%q: %q, ", k, m[k]))
-	}
-	buf.WriteString("}, ")
-}
-
 func writeStrMapMap(buf *bytes.Buffer, field string, m map[string]map[string]string) {
 	if len(m) == 0 {
 		return
 	}
 	buf.WriteString(field + ": map[string]map[string]string{")
-	for _, k := range sortedKeysMM(m) {
+	for _, k := range cldr.SortedKeys(m) {
 		buf.WriteString(fmt.Sprintf("%q: {", k))
 		inner := m[k]
-		ikeys := make([]string, 0, len(inner))
-		for ik := range inner {
-			ikeys = append(ikeys, ik)
-		}
-		sort.Strings(ikeys)
-		for _, ik := range ikeys {
+		for _, ik := range cldr.SortedKeys(inner) {
 			buf.WriteString(fmt.Sprintf("%q: %q, ", ik, inner[ik]))
 		}
 		buf.WriteString("}, ")
 	}
 	buf.WriteString("}, ")
-}
-
-func sortedKeys(m map[string][]string) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	sort.Strings(ks)
-	return ks
-}
-func sortedKeysMM(m map[string]map[string]string) []string {
-	ks := make([]string, 0, len(m))
-	for k := range m {
-		ks = append(ks, k)
-	}
-	sort.Strings(ks)
-	return ks
 }
 
 // ---- loading ----
@@ -440,17 +388,6 @@ func listLocales(dir string) []string {
 		}
 	}
 	return out
-}
-
-func loadJSON(path string, v any) bool {
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return false
-	}
-	if err := json.Unmarshal(data, v); err != nil {
-		log.Fatalf("%s: %v", path, err)
-	}
-	return true
 }
 
 // rawGregorian mirrors the JSON shape of ca-gregorian.json.
@@ -526,7 +463,7 @@ var widths = []string{"wide", "abbreviated", "narrow", "short"}
 
 func loadLocale(dir, loc string) (localeData, bool) {
 	var raw rawGregorian
-	if !loadJSON(filepath.Join(dir, loc, "ca-gregorian.json"), &raw) {
+	if !cldr.LoadJSON(filepath.Join(dir, loc, "ca-gregorian.json"), &raw) {
 		return localeData{}, false
 	}
 	m, ok := raw.Main[loc]
@@ -665,15 +602,12 @@ func zonesFor(dir, loc string) zoneData {
 		Main map[string]struct {
 			Dates struct {
 				TimeZoneNames struct {
-					HourFormat     string                `json:"hourFormat"`
-					GmtFormat      string                `json:"gmtFormat"`
-					GmtZero        string                `json:"gmtZeroFormat"`
-					RegionFormat   string                `json:"regionFormat"`
-					RegionDaylight string                `json:"regionFormat-type-daylight"`
-					RegionStandard string                `json:"regionFormat-type-standard"`
-					FallbackFormat string                `json:"fallbackFormat"`
-					Metazone       map[string]nameWidths `json:"metazone"`
-					Zone           json.RawMessage       `json:"zone"`
+					HourFormat   string                `json:"hourFormat"`
+					GmtFormat    string                `json:"gmtFormat"`
+					GmtZero      string                `json:"gmtZeroFormat"`
+					RegionFormat string                `json:"regionFormat"`
+					Metazone     map[string]nameWidths `json:"metazone"`
+					Zone         json.RawMessage       `json:"zone"`
 				} `json:"timeZoneNames"`
 			} `json:"dates"`
 		} `json:"main"`
@@ -684,7 +618,7 @@ func zonesFor(dir, loc string) zoneData {
 		zoneOverrides:  map[string]map[string]string{},
 		exemplarCities: map[string]string{},
 	}
-	if !loadJSON(filepath.Join(dir, loc, "timeZoneNames.json"), &raw) {
+	if !cldr.LoadJSON(filepath.Join(dir, loc, "timeZoneNames.json"), &raw) {
 		return out
 	}
 	m, ok := raw.Main[loc]
@@ -696,15 +630,6 @@ func zonesFor(dir, loc string) zoneData {
 	out.zones["gmtZero"] = z.GmtZero
 	if z.RegionFormat != "" {
 		out.zones["regionFormat"] = z.RegionFormat
-	}
-	if z.RegionDaylight != "" {
-		out.zones["regionDaylight"] = z.RegionDaylight
-	}
-	if z.RegionStandard != "" {
-		out.zones["regionStandard"] = z.RegionStandard
-	}
-	if z.FallbackFormat != "" {
-		out.zones["fallbackFormat"] = z.FallbackFormat
 	}
 	// hourFormat is "+HH:mm;-HH:mm"
 	if parts := strings.SplitN(z.HourFormat, ";", 2); len(parts) == 2 {
@@ -797,37 +722,6 @@ func flattenWidths(w nameWidths) map[string]string {
 	return out
 }
 
-func loadNumberingSystems(path string) map[string]string {
-	var raw struct {
-		Supplemental struct {
-			NumberingSystems map[string]struct {
-				Type   string `json:"_type"`
-				Digits string `json:"_digits"`
-			} `json:"numberingSystems"`
-		} `json:"supplemental"`
-	}
-	loadJSON(path, &raw)
-	out := map[string]string{}
-	for k, v := range raw.Supplemental.NumberingSystems {
-		if v.Type == "numeric" && v.Digits != "" {
-			out[k] = v.Digits
-		}
-	}
-	return out
-}
-
-func loadParentLocales(path string) map[string]string {
-	var raw struct {
-		Supplemental struct {
-			ParentLocales struct {
-				ParentLocale map[string]string `json:"parentLocale"`
-			} `json:"parentLocales"`
-		} `json:"supplemental"`
-	}
-	loadJSON(path, &raw)
-	return raw.Supplemental.ParentLocales.ParentLocale
-}
-
 // ---- day period rules ----
 
 type rawDayPeriodRule struct {
@@ -845,7 +739,7 @@ func loadDayPeriodRules(path string) map[string]map[string][2]int {
 			DayPeriodRuleSet map[string]map[string]rawDayPeriodRule `json:"dayPeriodRuleSet"`
 		} `json:"supplemental"`
 	}
-	loadJSON(path, &raw)
+	cldr.LoadJSON(path, &raw)
 	out := map[string]map[string][2]int{}
 	for loc, rules := range raw.Supplemental.DayPeriodRuleSet {
 		inner := map[string][2]int{}
@@ -915,7 +809,7 @@ func loadMetazoneInfo(path string) map[string][]genMetazonePeriod {
 			} `json:"metaZones"`
 		} `json:"supplemental"`
 	}
-	loadJSON(path, &raw)
+	cldr.LoadJSON(path, &raw)
 	out := map[string][]genMetazonePeriod{}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(raw.Supplemental.MetaZones.MetazoneInfo.Timezone, &root); err != nil {
@@ -986,7 +880,7 @@ func loadPrimaryZones(path string) map[string]string {
 			PrimaryZones map[string]string `json:"primaryZones"`
 		} `json:"supplemental"`
 	}
-	loadJSON(path, &raw)
+	cldr.LoadJSON(path, &raw)
 	out := map[string]string{}
 	for terr, zone := range raw.Supplemental.PrimaryZones {
 		if zone != "" {
@@ -1011,7 +905,7 @@ func loadZoneTerritories(path string, primary map[string]string) (map[string]str
 			} `json:"u"`
 		} `json:"keyword"`
 	}
-	loadJSON(path, &raw)
+	cldr.LoadJSON(path, &raw)
 
 	zoneToTerritory := map[string]string{}
 	zonesPerTerritory := map[string]int{}
@@ -1083,7 +977,7 @@ func loadTerritoryNames(dir string, parents map[string]string, rep map[string]bo
 				} `json:"localeDisplayNames"`
 			} `json:"main"`
 		}
-		if !loadJSON(filepath.Join(dir, loc, "territories.json"), &raw) {
+		if !cldr.LoadJSON(filepath.Join(dir, loc, "territories.json"), &raw) {
 			continue
 		}
 		if m, ok := raw.Main[loc]; ok {
@@ -1158,7 +1052,7 @@ func loadNumberFormatInfo(dir string) (ns, decimal map[string]string) {
 				Numbers map[string]json.RawMessage `json:"numbers"`
 			} `json:"main"`
 		}
-		if !loadJSON(filepath.Join(dir, loc, "numbers.json"), &raw) {
+		if !cldr.LoadJSON(filepath.Join(dir, loc, "numbers.json"), &raw) {
 			continue
 		}
 		m, ok := raw.Main[loc]

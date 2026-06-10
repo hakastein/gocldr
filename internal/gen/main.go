@@ -17,12 +17,13 @@ package main
 import (
 	"bytes"
 	"fmt"
-	"go/format"
 	"log"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+
+	"github.com/hakastein/gocldr/internal/cldr"
 )
 
 func main() {
@@ -55,7 +56,7 @@ func main() {
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			log.Fatal(err)
 		}
-		if err := writeFormatted(filepath.Join(dir, sanitize(tag)+"_gen.go"), b.Bytes()); err != nil {
+		if err := cldr.WriteFormatted(filepath.Join(dir, sanitize(tag)+"_gen.go"), b.Bytes()); err != nil {
 			log.Fatal(err)
 		}
 	}
@@ -73,7 +74,7 @@ func main() {
 	if err := os.MkdirAll(allDir, 0o755); err != nil {
 		log.Fatal(err)
 	}
-	if err := writeFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
+	if err := cldr.WriteFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
 		log.Fatal(err)
 	}
 
@@ -103,15 +104,6 @@ func enumerateTags(dir string) []string {
 // en_GB). The directory keeps the canonical tag verbatim.
 func sanitize(tag string) string {
 	return strings.ReplaceAll(tag, "-", "_")
-}
-
-// writeFormatted runs src through gofmt and writes it to path.
-func writeFormatted(path string, src []byte) error {
-	formatted, err := format.Source(src)
-	if err != nil {
-		return fmt.Errorf("gofmt failed for %s: %w", path, err)
-	}
-	return os.WriteFile(path, formatted, 0o644)
 }
 
 func equalStrings(a, b []string) bool {

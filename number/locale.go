@@ -3,6 +3,7 @@ package number
 import (
 	"strings"
 
+	"github.com/hakastein/gocldr/internal/locale"
 	"github.com/hakastein/gocldr/number/internal/data"
 )
 
@@ -34,25 +35,10 @@ var rootData = &data.LocaleData{
 // the CLDR fallback chain: exact -> parentLocale -> truncated subtags -> root.
 // On a total miss (nothing in the chain registered) it returns rootData so
 // output is never empty.
-func resolveLocale(locale string) *data.LocaleData {
-	loc := canonicalLocaleTag(locale)
-	seen := map[string]bool{}
-	for loc != "" && !seen[loc] {
-		seen[loc] = true
-		if d, ok := data.Lookup(loc); ok {
-			return d
-		}
-		// parentLocale override.
-		if p, ok := parentLocales[loc]; ok {
-			loc = p
-			continue
-		}
-		// Truncate trailing subtag.
-		if i := strings.LastIndexByte(loc, '-'); i >= 0 {
-			loc = loc[:i]
-			continue
-		}
-		break
+func resolveLocale(loc string) *data.LocaleData {
+	if tag, ok := locale.Resolve(loc, parentLocales, registered); ok {
+		d, _ := data.Lookup(tag)
+		return d
 	}
 	if d, ok := data.Lookup("root"); ok {
 		return d
@@ -60,23 +46,9 @@ func resolveLocale(locale string) *data.LocaleData {
 	return rootData
 }
 
-// canonicalLocaleTag normalises a BCP-47 / CLDR tag for table lookup.
-func canonicalLocaleTag(loc string) string {
-	loc = strings.ReplaceAll(loc, "_", "-")
-	parts := strings.Split(loc, "-")
-	for i, p := range parts {
-		switch {
-		case i == 0:
-			parts[i] = strings.ToLower(p)
-		case len(p) == 2:
-			parts[i] = strings.ToUpper(p)
-		case len(p) == 4:
-			parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
-		default:
-			parts[i] = strings.ToLower(p)
-		}
-	}
-	return strings.Join(parts, "-")
+func registered(tag string) bool {
+	_, ok := data.Lookup(tag)
+	return ok
 }
 
 // resolveCurrency builds currencyInfo for the given ISO code in the locale. The

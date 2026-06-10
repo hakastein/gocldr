@@ -26,6 +26,8 @@ type formatCtx struct {
 	// saving anywhere in the surrounding year. ICU resolves a LONG generic name
 	// to the zone's standard name when the zone never observes DST.
 	zoneObservesDST bool
+	// pool caches the best-fit candidate pool built by skeletonPool.
+	pool map[string]string
 }
 
 // forcePad24 reports the ICU rule that a "numeric" hour is still padded to two
@@ -51,18 +53,7 @@ func (c *formatCtx) num(v, minWidth int) string {
 	if len(s) < minWidth {
 		s = strings.Repeat("0", minWidth-len(s)) + s
 	}
-	if len(c.digits) != 10 || (c.digits[0] == '0' && c.digits[9] == '9') {
-		return s
-	}
-	var b strings.Builder
-	for _, ch := range s {
-		if ch >= '0' && ch <= '9' {
-			b.WriteRune(c.digits[ch-'0'])
-		} else {
-			b.WriteRune(ch)
-		}
-	}
-	return b.String()
+	return c.localizeDigits(s)
 }
 
 // interpret runs the CLDR pattern over t, emitting localized text.
@@ -112,7 +103,7 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 	switch ch {
 	case 'G': // era
 		return c.era(count, t)
-	case 'y', 'Y', 'u': // year (Y=week-year approximated as year)
+	case 'y', 'Y', 'u', 'r': // year (Y=week-year, r=related Gregorian, both ≈ year here)
 		return c.year(count, t)
 	case 'M', 'L': // month (format vs stand-alone)
 		return c.month(ch, count, t)
@@ -448,17 +439,7 @@ func (c *formatCtx) fraction(count int, t time.Time) string {
 	if count > 9 {
 		full += strings.Repeat("0", count-9)
 	}
-	frac := full[:count]
-	// localize digits
-	var b strings.Builder
-	for _, ch := range frac {
-		if len(c.digits) == 10 && ch >= '0' && ch <= '9' {
-			b.WriteRune(c.digits[ch-'0'])
-		} else {
-			b.WriteRune(ch)
-		}
-	}
-	return b.String()
+	return c.localizeDigits(full[:count])
 }
 
 // zone renders a time zone field. For UTC it uses the CLDR zone names; for
