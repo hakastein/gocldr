@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Command gen reads the Unicode CLDR JSON data (cldr-numbers-full and
 // cldr-core) and emits the number locale data. It covers every locale present
 // in cldr-numbers-full (~710).

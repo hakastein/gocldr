@@ -1,9 +1,17 @@
 // fixtures.js generates golden Intl.DateTimeFormat outputs for the Go test
 // suite. Run with full-ICU node (v22):
 //
-//	node cldr/datetime/internal/gen/fixtures.js > cldr/datetime/testdata/intl_dates.json
+//	node datetime/internal/gen/fixtures.js
+//	  (from any working directory — always writes to
+//	   datetime/testdata/intl_dates.json relative to this script)
+//
+// Normally invoked via `go generate ./datetime/...` which runs the
+// //go:generate directive in datetime.go.
 //
 // Every case fixes timeZone:'UTC' so the output is deterministic.
+
+const fs = require('fs');
+const path = require('path');
 
 const locales = [
   "en", "en-GB", "de", "fr", "ru", "ja", "ar", "zh", "es", "it",
@@ -123,4 +131,6 @@ for (const loc of locales) {
   }
 }
 
-process.stdout.write(JSON.stringify(out, null, 0));
+const outFile = path.join(__dirname, '..', '..', 'testdata', 'intl_dates.json');
+fs.writeFileSync(outFile, JSON.stringify(out, null, 0));
+process.stderr.write(`gen: wrote ${outFile} (${out.length} fixtures)\n`);

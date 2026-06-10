@@ -24,9 +24,9 @@ import (
 
 // CLDR input paths come from $CLDR_DATA (set by the pinned gen image).
 // Run via `make gen`; never on the host.
-//go:generate go run ./internal/gen/main.go -out tables_gen.go
-//go:generate node internal/gen/samples.js testdata/cldr_samples.json
-//go:generate node internal/gen/intl.js testdata/intl_plurals.json
+//go:generate go run ./internal/gen -out tables_gen.go
+//go:generate node internal/gen/samples.js
+//go:generate node internal/gen/intl.js
 
 // Category is a CLDR plural category.
 type Category string

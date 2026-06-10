@@ -19,7 +19,7 @@ import (
 	"github.com/hakastein/gocldr/number/internal/data"
 )
 
-//go:generate go run ./internal/gen/main.go -out tables_gen.go
+//go:generate go run ./internal/gen -out tables_gen.go
 //go:generate node internal/gen/fixtures.js
 
 // Options mirrors the commonly used subset of Intl.NumberFormatOptions (ECMA-402).

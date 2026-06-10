@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Command gen reads the CLDR gregorian calendar data (cldr-dates-full) plus a
 // few supplemental files (cldr-core, cldr-numbers-full) and emits a generated
 // Go source file (tables_gen.go) for package datetime.
