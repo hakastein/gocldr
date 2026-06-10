@@ -19,6 +19,7 @@ import (
 	"strings"
 
 	"github.com/hakastein/gocldr/internal/decimal"
+	"github.com/hakastein/gocldr/internal/locale"
 )
 
 // CLDR input paths come from $CLDR_DATA (set by the pinned gen image).
@@ -318,47 +319,15 @@ func shiftPoint(intPart, fracPart string, by int) (string, string) {
 	return intPart, fracPart
 }
 
-// canonicalLocale normalises a BCP-47 / CLDR locale tag for table lookup: it
-// lower-cases the language subtag and upper-cases a two-letter region subtag,
-// joining subtags with '-'. Underscores are treated as subtag separators.
-func canonicalLocale(loc string) string {
-	loc = strings.ReplaceAll(loc, "_", "-")
-	parts := strings.Split(loc, "-")
-	for i, p := range parts {
-		if i == 0 {
-			parts[i] = strings.ToLower(p)
-			continue
-		}
-		switch len(p) {
-		case 2:
-			parts[i] = strings.ToUpper(p)
-		case 4:
-			// Script subtag: title-case it, e.g. "latn" -> "Latn".
-			parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
-		default:
-			parts[i] = strings.ToLower(p)
-		}
-	}
-	return strings.Join(parts, "-")
-}
-
 // lookup resolves a locale against a table by trying the exact (canonicalised)
-// tag and then progressively stripping trailing subtags, falling back to
-// "root". It returns the matching rule set.
+// tag and then progressively stripping trailing subtags. The walk deliberately
+// passes nil parentLocale overrides: Intl.PluralRules resolves by truncation
+// only (ICU selects pt's rules for pt-AO, not pt-PT's). A total miss yields
+// the universal "everything is Other" rule set, which is also how CLDR's
+// catch-all "und" entry behaves.
 func lookup(table map[string]*ruleSet, loc string) *ruleSet {
-	loc = canonicalLocale(loc)
-	for {
-		if rs, ok := table[loc]; ok {
-			return rs
-		}
-		idx := strings.LastIndexByte(loc, '-')
-		if idx < 0 {
-			break
-		}
-		loc = loc[:idx]
-	}
-	if rs, ok := table["root"]; ok {
-		return rs
+	if tag, ok := locale.Resolve(loc, nil, func(t string) bool { _, ok := table[t]; return ok }); ok {
+		return table[tag]
 	}
 	return otherOnly
 }
