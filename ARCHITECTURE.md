@@ -40,9 +40,19 @@ no registration.
 
 ## Fault-tolerance / fallback
 
-Each formatter resolves a requested BCP-47 locale through the CLDR fallback chain
-(exact match → explicit `parentLocale` → trailing-subtag truncation → root/en).
-Unknown locales degrade rather than error (`datetime.Format` falls back to RFC3339).
+Each formatter resolves a requested BCP-47 locale through the CLDR fallback
+chain implemented in `internal/locale` (exact match → explicit `parentLocale` →
+trailing-subtag truncation). Unknown locales degrade rather than error, with a
+per-package terminal step that mirrors how each formatter can least-badly
+degrade:
+
+- `number` falls back to the registered `root` data (plain ASCII grouped
+  decimals), or a built-in copy of it if nothing is registered;
+- `datetime` falls back to `en` (its registered `und` root data is deliberately
+  skipped), and to a plain RFC3339 string when no data is linked in at all;
+- `plural` walks by truncation only — `Intl.PluralRules` ignores `parentLocale`
+  overrides (ICU selects `pt`'s rules for `pt-AO`, not `pt-PT`'s) — and ends at
+  the universal "everything is Other" rule set.
 
 ## Generated data
 
