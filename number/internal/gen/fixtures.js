@@ -60,6 +60,12 @@ const decimalOptionSets = [
   { maximumSignificantDigits: 3 },
   { minimumSignificantDigits: 2, maximumSignificantDigits: 5 },
   { useGrouping: false },
+  { useGrouping: true },
+  { useGrouping: 'always' },
+  { useGrouping: 'auto' },
+  { useGrouping: 'min2' },
+  // ES2023 legacy quirk: the STRING 'true' is an alias of 'auto', not 'always'.
+  { useGrouping: 'true' },
   { minimumIntegerDigits: 4 },
   { minimumFractionDigits: 0, maximumFractionDigits: 6 },
 ];

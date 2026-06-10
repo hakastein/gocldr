@@ -604,15 +604,12 @@ func zonesFor(dir, loc string) zoneData {
 		Main map[string]struct {
 			Dates struct {
 				TimeZoneNames struct {
-					HourFormat     string                `json:"hourFormat"`
-					GmtFormat      string                `json:"gmtFormat"`
-					GmtZero        string                `json:"gmtZeroFormat"`
-					RegionFormat   string                `json:"regionFormat"`
-					RegionDaylight string                `json:"regionFormat-type-daylight"`
-					RegionStandard string                `json:"regionFormat-type-standard"`
-					FallbackFormat string                `json:"fallbackFormat"`
-					Metazone       map[string]nameWidths `json:"metazone"`
-					Zone           json.RawMessage       `json:"zone"`
+					HourFormat   string                `json:"hourFormat"`
+					GmtFormat    string                `json:"gmtFormat"`
+					GmtZero      string                `json:"gmtZeroFormat"`
+					RegionFormat string                `json:"regionFormat"`
+					Metazone     map[string]nameWidths `json:"metazone"`
+					Zone         json.RawMessage       `json:"zone"`
 				} `json:"timeZoneNames"`
 			} `json:"dates"`
 		} `json:"main"`
@@ -635,15 +632,6 @@ func zonesFor(dir, loc string) zoneData {
 	out.zones["gmtZero"] = z.GmtZero
 	if z.RegionFormat != "" {
 		out.zones["regionFormat"] = z.RegionFormat
-	}
-	if z.RegionDaylight != "" {
-		out.zones["regionDaylight"] = z.RegionDaylight
-	}
-	if z.RegionStandard != "" {
-		out.zones["regionStandard"] = z.RegionStandard
-	}
-	if z.FallbackFormat != "" {
-		out.zones["fallbackFormat"] = z.FallbackFormat
 	}
 	// hourFormat is "+HH:mm;-HH:mm"
 	if parts := strings.SplitN(z.HourFormat, ";", 2); len(parts) == 2 {
