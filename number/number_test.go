@@ -198,22 +198,68 @@ func TestUnknownLocaleDegradesToRoot(t *testing.T) {
 	assert.Equal(t, "1,234.5", got)
 }
 
-// TestOutOfRangeOptionsDoNotPanic verifies digit-count options outside Intl's
-// documented ranges are clamped rather than panicking. Intl throws a RangeError;
-// this no-panic formatter clamps into range instead.
-func TestOutOfRangeOptionsDoNotPanic(t *testing.T) {
+// TestOutOfRangeOptionsClamp pins the clamping contract for digit-count
+// options outside Intl's documented ranges (Intl throws a RangeError; this
+// no-panic formatter clamps into range instead): the out-of-range bag must
+// produce exactly the output of its explicitly clamped equivalent, and that
+// output is asserted literally so a wrong clamp cannot slip through.
+func TestOutOfRangeOptionsClamp(t *testing.T) {
 	intp := func(v int) *int { return &v }
-	cases := []number.Options{
-		{MinimumIntegerDigits: intp(0)},
-		{MinimumIntegerDigits: intp(-5)},
-		{MaximumFractionDigits: intp(1000)},
-		{MinimumFractionDigits: intp(-1)},
-		{MinimumSignificantDigits: intp(0), MaximumSignificantDigits: intp(0)},
-		{MaximumSignificantDigits: intp(10000)},
+	tests := []struct {
+		name    string
+		raw     number.Options
+		clamped number.Options
+		want    string
+	}{
+		{
+			name:    "minimumIntegerDigits 0 clamps to 1",
+			raw:     number.Options{MinimumIntegerDigits: intp(0)},
+			clamped: number.Options{MinimumIntegerDigits: intp(1)},
+			want:    "1,234.5",
+		},
+		{
+			name:    "minimumIntegerDigits -5 clamps to 1",
+			raw:     number.Options{MinimumIntegerDigits: intp(-5)},
+			clamped: number.Options{MinimumIntegerDigits: intp(1)},
+			want:    "1,234.5",
+		},
+		{
+			name:    "maximumFractionDigits 1000 clamps to 100",
+			raw:     number.Options{MaximumFractionDigits: intp(1000)},
+			clamped: number.Options{MaximumFractionDigits: intp(100)},
+			want:    "1,234.5",
+		},
+		{
+			name:    "minimumFractionDigits -1 clamps to 0",
+			raw:     number.Options{MinimumFractionDigits: intp(-1)},
+			clamped: number.Options{MinimumFractionDigits: intp(0)},
+			want:    "1,234.5",
+		},
+		{
+			name:    "significant digits 0 clamp to 1",
+			raw:     number.Options{MinimumSignificantDigits: intp(0), MaximumSignificantDigits: intp(0)},
+			clamped: number.Options{MinimumSignificantDigits: intp(1), MaximumSignificantDigits: intp(1)},
+			want:    "1,000",
+		},
+		{
+			name:    "maximumSignificantDigits 10000 clamps to 21",
+			raw:     number.Options{MaximumSignificantDigits: intp(10000)},
+			clamped: number.Options{MaximumSignificantDigits: intp(21)},
+			want:    "1,234.5",
+		},
+		{
+			name:    "maxSignificant below minSignificant is raised",
+			raw:     number.Options{MinimumSignificantDigits: intp(5), MaximumSignificantDigits: intp(2)},
+			clamped: number.Options{MinimumSignificantDigits: intp(5), MaximumSignificantDigits: intp(5)},
+			want:    "1,234.5",
+		},
 	}
-	for _, opts := range cases {
-		assert.NotPanics(t, func() {
-			_ = number.Format("en", 1234.5, opts)
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := number.Format("en", 1234.5, tc.raw)
+			assert.Equal(t, tc.want, got)
+			assert.Equal(t, number.Format("en", 1234.5, tc.clamped), got,
+				"out-of-range options must behave exactly like their clamped equivalent")
 		})
 	}
 }
