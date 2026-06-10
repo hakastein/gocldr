@@ -26,6 +26,8 @@ type formatCtx struct {
 	// saving anywhere in the surrounding year. ICU resolves a LONG generic name
 	// to the zone's standard name when the zone never observes DST.
 	zoneObservesDST bool
+	// pool caches the best-fit candidate pool built by skeletonPool.
+	pool map[string]string
 }
 
 // forcePad24 reports the ICU rule that a "numeric" hour is still padded to two
