@@ -461,11 +461,93 @@ func fieldClass(ch rune) rune {
 	return 0
 }
 
-// bestMatch finds the closest availableFormats pattern for the requested
-// skeleton and adjusts field widths to the request. This follows ICU's
+// patternSkeleton derives the skeleton of a concrete pattern: unquoted field
+// runs collapsed per field class (keeping the widest run), emitted in the
+// canonical class order. This is how ICU's DateTimePatternGenerator computes
+// the skeletons under which it files the standard date/time patterns.
+func patternSkeleton(pattern string) string {
+	fields := map[rune]skelField{}
+	runes := []rune(pattern)
+	n := len(runes)
+	inQuote := false
+	for i := 0; i < n; {
+		ch := runes[i]
+		if ch == '\'' {
+			inQuote = !inQuote
+			i++
+			continue
+		}
+		if inQuote || !isPatternLetter(ch) {
+			i++
+			continue
+		}
+		j := i
+		for j < n && runes[j] == ch {
+			j++
+		}
+		// AM/PM (a, and the b variant) is an implicit companion of the 12-hour
+		// 'h' field: ICU drops it when computing pattern skeletons, so a
+		// request for "hms" can match "a h시 m분 s초 zzzz" without the day
+		// period counting as an extra field. The flexible day period B stays
+		// significant.
+		if cls := fieldClass(ch); cls != 0 && ch != 'a' && ch != 'b' {
+			if cnt := j - i; cnt > fields[cls].count {
+				fields[cls] = skelField{letter: ch, count: cnt}
+			}
+		}
+		i = j
+	}
+	var b strings.Builder
+	for _, cls := range append(dateClasses, timeClasses...) {
+		if f, ok := fields[cls]; ok {
+			b.WriteString(strings.Repeat(string(f.letter), f.count))
+		}
+	}
+	return b.String()
+}
+
+// skeletonPool returns the candidate pool for best-fit matching: the locale's
+// availableFormats plus — mirroring ICU's DateTimePatternGenerator, which
+// seeds its pool with the standard patterns — the four standard date and four
+// standard time patterns keyed by their derived skeletons. That seeding is
+// what lets e.g. a ja Hms+zone request find the full time pattern
+// "H時mm分ss秒 zzzz" (availableFormats only carry a plain "H:mm:ss").
+// An availableFormats entry wins over a standard pattern with the same
+// skeleton. The pool is cached on the context.
+func (c *formatCtx) skeletonPool() map[string]string {
+	if c.pool != nil {
+		return c.pool
+	}
+	pool := make(map[string]string, len(c.ld.Available)+8)
+	for k, v := range c.ld.Available {
+		pool[k] = v
+	}
+	// Fixed style order keeps the pool deterministic if two standard patterns
+	// ever derive the same skeleton (first one wins).
+	for _, styles := range []map[string]string{c.ld.DateFormats, c.ld.TimeFormats} {
+		for _, style := range []string{"full", "long", "medium", "short"} {
+			pat := styles[style]
+			if pat == "" {
+				continue
+			}
+			skel := patternSkeleton(pat)
+			if skel == "" {
+				continue
+			}
+			if _, ok := pool[skel]; !ok {
+				pool[skel] = pat
+			}
+		}
+	}
+	c.pool = pool
+	return pool
+}
+
+// bestMatch finds the closest candidate pattern for the requested skeleton and
+// adjusts field widths to the request. This follows ICU's
 // DateTimePatternGenerator best-fit approach approximately.
 func (c *formatCtx) bestMatch(skel string) string {
-	avail := c.ld.Available
+	avail := c.skeletonPool()
 	// 1. exact hit
 	if p, ok := avail[skel]; ok {
 		return p
@@ -531,11 +613,20 @@ func matchScore(want, have map[rune]skelField) int {
 			score += 1000
 			continue
 		}
-		score += widthDistance(wf, hf)
+		score += widthDistance(cls, wf, hf)
 		// Prefer the candidate whose hour cycle (12 vs 24) matches the request,
 		// so e.g. skeleton "hmm" picks "h:mm a" over "HH:mm".
 		if cls == 'h' && hourIs12(wf.letter) != hourIs12(hf.letter) {
 			score += 5
+		}
+		// Zone letters encode the format kind (z specific name, v generic name,
+		// O/X/Z offsets). Prefer the candidate whose kind matches the request:
+		// the letter is rewritten to the requested one later anyway, but the
+		// surrounding pattern should come from the closest kind (e.g. a zzzz
+		// request must pick ko's full time pattern "a h시 m분 s초 zzzz" over the
+		// generic-v "a h:mm:ss v" availableFormat).
+		if cls == 'z' && zoneKind(wf.letter) != zoneKind(hf.letter) {
+			score += 20
 		}
 		// Component options always use the format context (letters E and M), so
 		// prefer candidates that also use the format letter over the stand-alone
@@ -557,6 +648,20 @@ func matchScore(want, have map[rune]skelField) int {
 
 func hourIs12(letter rune) bool {
 	return letter == 'h' || letter == 'K'
+}
+
+// zoneKind groups the zone pattern letters by the format they produce:
+// specific names (z), generic/location names (v, V) and numeric offsets
+// (O, Z, X, x).
+func zoneKind(letter rune) rune {
+	switch letter {
+	case 'z':
+		return 'z'
+	case 'v', 'V':
+		return 'v'
+	default:
+		return 'O'
+	}
 }
 
 // isStandalone reports whether a letter is a CLDR stand-alone field variant
@@ -582,19 +687,23 @@ func fieldNumeric(letter rune, count int) bool {
 }
 
 // widthDistance scores the difference in field length, with extra penalty when
-// crossing the numeric<->alpha boundary (e.g. M vs MMM).
-func widthDistance(want, have skelField) int {
+// crossing the numeric<->name boundary (e.g. M vs MMM). The boundary only
+// exists for fields that have both numeric and name forms — month/quarter
+// (M/L/Q/q numeric at count<=2) and weekday (e/c numeric, E a name); hour,
+// minute and second are always numeric, and zone/era widths merely select
+// among name forms, so for them a width difference is just that.
+func widthDistance(cls rune, want, have skelField) int {
 	d := want.count - have.count
 	if d < 0 {
 		d = -d
 	}
-	score := d
-	wantNumeric := want.count <= 2
-	haveNumeric := have.count <= 2
-	if wantNumeric != haveNumeric {
-		score += 10
+	switch cls {
+	case 'M', 'Q', 'E':
+		if fieldNumeric(want.letter, want.count) != fieldNumeric(have.letter, have.count) {
+			d += 10
+		}
 	}
-	return score
+	return d
 }
 
 // adjustWidths rewrites the chosen pattern's field lengths to match the request
@@ -676,16 +785,14 @@ func (c *formatCtx) adjustWidths(pattern string, want map[rune]skelField) string
 					newCnt = 1
 				}
 			}
-			// Minute / second: keep the candidate width unless 2-digit is
-			// requested. These fields are conventionally rendered padded inside a
-			// time pattern, so we preserve the matched pattern's width for
-			// "numeric" rather than forcing a single digit.
+			// Minute / second: requested and pattern fields are both numeric,
+			// and UTS #35 keeps the pattern's own length in the
+			// numeric<->numeric case, so the candidate width always wins
+			// (en "HH:mm:ss" stays padded for a numeric request, ko
+			// "a h시 m분 s초" stays unpadded for a 2-digit one — both match
+			// Intl).
 			if cls == 'm' || cls == 's' {
-				if wf.count >= 2 {
-					newCnt = 2
-				} else {
-					newCnt = cnt
-				}
+				newCnt = cnt
 			}
 			for k := 0; k < newCnt; k++ {
 				b.WriteRune(outCh)
@@ -780,7 +887,7 @@ func connectorStyle(want map[rune]skelField) string {
 }
 
 func (c *formatCtx) matchPortion(skel string, want map[rune]skelField) string {
-	avail := c.ld.Available
+	avail := c.skeletonPool()
 	if p, ok := avail[skel]; ok {
 		return c.adjustWidths(p, want)
 	}
