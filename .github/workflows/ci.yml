@@ -24,7 +24,7 @@ jobs:
         # Floor version from go.mod and the latest stable release.
         go: ['1.23', 'stable']
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
@@ -44,7 +44,7 @@ jobs:
     name: lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - uses: actions/setup-go@v6
         with:
@@ -78,7 +78,7 @@ jobs:
     name: generated files are current
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       # Rebuild every CLDR table and Intl golden fixture from the pinned data
       # (gen/Dockerfile + gen/package.json) and fail if the committed output
