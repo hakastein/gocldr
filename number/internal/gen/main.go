@@ -32,6 +32,7 @@ import (
 	"strings"
 
 	"github.com/hakastein/gocldr/internal/cldr"
+	"github.com/hakastein/gocldr/internal/locale"
 )
 
 func main() {
@@ -400,7 +401,7 @@ func (g *generator) loadCurrencyDisplay(loc string) {
 func (g *generator) resolveCurrencies() {
 	for loc, entry := range g.localeEntries {
 		resolved := map[string]displayCurrency{}
-		cur := canonicalLocaleTag(loc)
+		cur := locale.Canonical(loc)
 		seen := map[string]bool{}
 		for cur != "" && !seen[cur] {
 			seen[cur] = true
@@ -425,27 +426,6 @@ func (g *generator) resolveCurrencies() {
 			entry.currencies = resolved
 		}
 	}
-}
-
-// canonicalLocaleTag mirrors the runtime helper of the same name so the
-// fallback chain used to pre-resolve currency display matches the one the
-// number package walks at lookup time.
-func canonicalLocaleTag(loc string) string {
-	loc = strings.ReplaceAll(loc, "_", "-")
-	parts := strings.Split(loc, "-")
-	for i, p := range parts {
-		switch {
-		case i == 0:
-			parts[i] = strings.ToLower(p)
-		case len(p) == 2:
-			parts[i] = strings.ToUpper(p)
-		case len(p) == 4:
-			parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
-		default:
-			parts[i] = strings.ToLower(p)
-		}
-	}
-	return strings.Join(parts, "-")
 }
 
 func (g *generator) emit(out string) {
