@@ -201,9 +201,8 @@ func OperandsFromString(s string) (Operands, error) {
 		return Operands{}, errors.New("plural: empty number string")
 	}
 	str := s
-	switch str[0] {
-	case '+', '-':
-		str = str[1:]
+	if str[0] == '+' || str[0] == '-' {
+		str = str[1:] // operands are defined on the absolute value
 	}
 	// Split off the compact exponent suffix.
 	var compact int
@@ -262,21 +261,12 @@ func OperandsFromString(s string) (Operands, error) {
 		ops.T = t64
 	}
 
-	// N: absolute numeric value (integer part plus fraction).
-	n, err := strconv.ParseFloat(intPart+"."+pad(fracPart), 64)
-	if err != nil {
-		n = float64(i64)
-	}
-	ops.N = n
+	// N: absolute numeric value (integer part plus fraction). Both digit
+	// strings were validated above and the integer part fits int64, so the
+	// composed literal (Go accepts a bare trailing '.') always parses.
+	ops.N, _ = strconv.ParseFloat(intPart+"."+fracPart, 64)
 	ops.C = compact
 	return ops, nil
-}
-
-func pad(frac string) string {
-	if frac == "" {
-		return "0"
-	}
-	return frac
 }
 
 func allDigits(s string) bool {
