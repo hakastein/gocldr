@@ -190,8 +190,9 @@ func trimToMinFrac(s string, minFrac int) string {
 // (V, W, F, T): the number of digits after the decimal point determines V/W
 // and their integer values determine F/T, exactly as written.
 //
-// The accepted syntax is an optional leading '-' (or '+'), one or more integer
-// digits, an optional '.' with one or more fraction digits, and an optional
+// The accepted syntax is an optional leading '-' (or '+'), integer digits, an
+// optional '.' with fraction digits — at least one digit must be present
+// overall, so ".5" and "5." are accepted but "." is not — and an optional
 // exponent suffix 'c' or 'e' followed by a signed integer (e.g. "1.5",
 // "1000000", "1.2c6"). The exponent scales the value by shifting the decimal
 // point and is also reported as operand C, per UTS #35 (so "1.2c6" yields
@@ -221,6 +222,9 @@ func OperandsFromString(s string) (Operands, error) {
 	if dot := strings.IndexByte(str, '.'); dot >= 0 {
 		intPart = str[:dot]
 		fracPart = str[dot+1:]
+	}
+	if intPart == "" && fracPart == "" {
+		return Operands{}, errors.New("plural: no digits in " + strconv.Quote(s))
 	}
 	if intPart == "" {
 		intPart = "0"
