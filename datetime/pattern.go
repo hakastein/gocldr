@@ -114,7 +114,7 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 	switch ch {
 	case 'G': // era
 		return c.era(count, t)
-	case 'y', 'Y', 'u': // year (Y=week-year approximated as year)
+	case 'y', 'Y', 'u', 'r': // year (Y=week-year, r=related Gregorian, both ≈ year here)
 		return c.year(count, t)
 	case 'M', 'L': // month (format vs stand-alone)
 		return c.month(ch, count, t)
