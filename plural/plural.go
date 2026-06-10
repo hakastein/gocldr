@@ -19,13 +19,14 @@ import (
 	"strings"
 
 	"github.com/hakastein/gocldr/internal/decimal"
+	"github.com/hakastein/gocldr/internal/locale"
 )
 
 // CLDR input paths come from $CLDR_DATA (set by the pinned gen image).
 // Run via `make gen`; never on the host.
-//go:generate go run ./internal/gen/main.go -out tables_gen.go
-//go:generate node internal/gen/samples.js testdata/cldr_samples.json
-//go:generate node internal/gen/intl.js testdata/intl_plurals.json
+//go:generate go run ./internal/gen -out tables_gen.go
+//go:generate node internal/gen/samples.js
+//go:generate node internal/gen/intl.js
 
 // Category is a CLDR plural category.
 type Category string
@@ -189,8 +190,9 @@ func trimToMinFrac(s string, minFrac int) string {
 // (V, W, F, T): the number of digits after the decimal point determines V/W
 // and their integer values determine F/T, exactly as written.
 //
-// The accepted syntax is an optional leading '-' (or '+'), one or more integer
-// digits, an optional '.' with one or more fraction digits, and an optional
+// The accepted syntax is an optional leading '-' (or '+'), integer digits, an
+// optional '.' with fraction digits — at least one digit must be present
+// overall, so ".5" and "5." are accepted but "." is not — and an optional
 // exponent suffix 'c' or 'e' followed by a signed integer (e.g. "1.5",
 // "1000000", "1.2c6"). The exponent scales the value by shifting the decimal
 // point and is also reported as operand C, per UTS #35 (so "1.2c6" yields
@@ -200,9 +202,8 @@ func OperandsFromString(s string) (Operands, error) {
 		return Operands{}, errors.New("plural: empty number string")
 	}
 	str := s
-	switch str[0] {
-	case '+', '-':
-		str = str[1:]
+	if str[0] == '+' || str[0] == '-' {
+		str = str[1:] // operands are defined on the absolute value
 	}
 	// Split off the compact exponent suffix.
 	var compact int
@@ -220,6 +221,9 @@ func OperandsFromString(s string) (Operands, error) {
 	if dot := strings.IndexByte(str, '.'); dot >= 0 {
 		intPart = str[:dot]
 		fracPart = str[dot+1:]
+	}
+	if intPart == "" && fracPart == "" {
+		return Operands{}, errors.New("plural: no digits in " + strconv.Quote(s))
 	}
 	if intPart == "" {
 		intPart = "0"
@@ -261,21 +265,12 @@ func OperandsFromString(s string) (Operands, error) {
 		ops.T = t64
 	}
 
-	// N: absolute numeric value (integer part plus fraction).
-	n, err := strconv.ParseFloat(intPart+"."+pad(fracPart), 64)
-	if err != nil {
-		n = float64(i64)
-	}
-	ops.N = n
+	// N: absolute numeric value (integer part plus fraction). Both digit
+	// strings were validated above and the integer part fits int64, so the
+	// composed literal (Go accepts a bare trailing '.') always parses.
+	ops.N, _ = strconv.ParseFloat(intPart+"."+fracPart, 64)
 	ops.C = compact
 	return ops, nil
-}
-
-func pad(frac string) string {
-	if frac == "" {
-		return "0"
-	}
-	return frac
 }
 
 func allDigits(s string) bool {
@@ -318,47 +313,15 @@ func shiftPoint(intPart, fracPart string, by int) (string, string) {
 	return intPart, fracPart
 }
 
-// canonicalLocale normalises a BCP-47 / CLDR locale tag for table lookup: it
-// lower-cases the language subtag and upper-cases a two-letter region subtag,
-// joining subtags with '-'. Underscores are treated as subtag separators.
-func canonicalLocale(loc string) string {
-	loc = strings.ReplaceAll(loc, "_", "-")
-	parts := strings.Split(loc, "-")
-	for i, p := range parts {
-		if i == 0 {
-			parts[i] = strings.ToLower(p)
-			continue
-		}
-		switch len(p) {
-		case 2:
-			parts[i] = strings.ToUpper(p)
-		case 4:
-			// Script subtag: title-case it, e.g. "latn" -> "Latn".
-			parts[i] = strings.ToUpper(p[:1]) + strings.ToLower(p[1:])
-		default:
-			parts[i] = strings.ToLower(p)
-		}
-	}
-	return strings.Join(parts, "-")
-}
-
 // lookup resolves a locale against a table by trying the exact (canonicalised)
-// tag and then progressively stripping trailing subtags, falling back to
-// "root". It returns the matching rule set.
+// tag and then progressively stripping trailing subtags. The walk deliberately
+// passes nil parentLocale overrides: Intl.PluralRules resolves by truncation
+// only (ICU selects pt's rules for pt-AO, not pt-PT's). A total miss yields
+// the universal "everything is Other" rule set, which is also how CLDR's
+// catch-all "und" entry behaves.
 func lookup(table map[string]*ruleSet, loc string) *ruleSet {
-	loc = canonicalLocale(loc)
-	for {
-		if rs, ok := table[loc]; ok {
-			return rs
-		}
-		idx := strings.LastIndexByte(loc, '-')
-		if idx < 0 {
-			break
-		}
-		loc = loc[:idx]
-	}
-	if rs, ok := table["root"]; ok {
-		return rs
+	if tag, ok := locale.Resolve(loc, nil, func(t string) bool { _, ok := table[t]; return ok }); ok {
+		return table[tag]
 	}
 	return otherOnly
 }

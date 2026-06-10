@@ -1,5 +1,3 @@
-//go:build ignore
-
 // Command gen reads the CLDR cardinal and ordinal plural-rule data and emits a
 // generated Go source file (tables_gen.go) for package plural.
 //

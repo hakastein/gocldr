@@ -11,13 +11,16 @@ echo "==> Node $(node -v) | ICU $(node -e 'process.stdout.write(process.versions
 echo "==> CLDR JSON: ${CLDR_DATA}"
 echo "==> go $(go version)"
 
-# Each package's //go:generate directives run both its table generator
-# (reading $CLDR_DATA) and its Node fixture dump (using this image's Intl.*).
+# Each formatter package's //go:generate directives run both its table
+# generator (reading $CLDR_DATA) and its Node fixture dump (using this image's
+# Intl.*). The module root deliberately carries no directive.
 echo "==> go generate ./..."
 go generate ./...
 
-# Refresh the cross-domain locale umbrellas (locales/<tag>, locales/all) so they
-# track the per-domain locale sets just regenerated above. Reads no CLDR data.
+# The cross-domain locale umbrellas (locales/<tag>, locales/all) regenerate
+# strictly AFTER the per-domain generators so they track the locale sets just
+# produced; this is the only place the umbrella generator runs. Reads no CLDR
+# data.
 echo "==> go run ./internal/gen (cross-domain umbrellas)"
 go run ./internal/gen
 
