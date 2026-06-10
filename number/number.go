@@ -103,10 +103,10 @@ func Format(locale string, value float64, opts Options) string {
 		scaled = value * 100
 	}
 
+	rc := renderCtx{style: style, display: display, cur: cur}
+
 	if math.IsInf(scaled, 0) {
-		body := ld.Sym.Infinity
-		neg := math.Signbit(scaled)
-		return wrapPattern(ld, pattern, body, neg, style, display, cur, "")
+		return wrapPattern(ld, pattern, ld.Sym.Infinity, math.Signbit(scaled), rc)
 	}
 
 	// Format the magnitude into integer/fraction digit strings.
@@ -115,22 +115,29 @@ func Format(locale string, value float64, opts Options) string {
 	// Preserve the sign bit even when the magnitude rounds to zero: Intl renders
 	// negative zero (and negatives that round to integer zero) as "-0"/"-0%".
 	negative := math.Signbit(scaled)
-	// Apply grouping to the integer part.
-	grouped := applyGrouping(ld, pattern, intPart, &opts, style)
-
-	body := grouped
+	// Assemble the localized body: group separators and the decimal separator
+	// are substituted here, so downstream steps never have to disambiguate a
+	// '.' that could mean either (e.g. de groups with '.').
+	body := applyGrouping(ld, pattern, intPart, &opts)
 	if fracPart != "" {
-		body += "." + fracPart
+		body += ld.Sym.Decimal + fracPart
 	}
 
 	// For currencyDisplay:"name" the plural category must reflect the digits
 	// actually shown (Intl derives plural operands from the formatted number).
-	plCat := ""
 	if style == "currency" && display == "name" {
-		plCat = pluralCategoryForDigits(locale, intPart, fracPart)
+		rc.plCat = pluralCategoryForDigits(locale, intPart, fracPart)
 	}
 
-	return wrapPattern(ld, pattern, body, negative, style, display, cur, plCat)
+	return wrapPattern(ld, pattern, body, negative, rc)
+}
+
+// renderCtx carries the resolved style/currency context through wrapPattern.
+type renderCtx struct {
+	style   string
+	display string
+	cur     currencyInfo
+	plCat   string
 }
 
 // roundSpec carries the resolved digit constraints for one Format call.
@@ -339,7 +346,7 @@ func padInt(intPart string, minInt int) string {
 
 // applyGrouping inserts the locale group separator into the integer digit
 // string per the pattern's grouping sizes and the grouping options.
-func applyGrouping(ld *data.LocaleData, pattern, intPart string, o *Options, style string) string {
+func applyGrouping(ld *data.LocaleData, pattern, intPart string, o *Options) string {
 	mode := groupingMode(o)
 	if mode == groupOff {
 		return intPart
@@ -383,11 +390,11 @@ func applyGrouping(ld *data.LocaleData, pattern, intPart string, o *Options, sty
 		chunks = append(chunks, intPart[start:i])
 		i = start
 	}
-	// chunks are right-to-left; reverse and join.
+	// chunks are right-to-left; reverse and join with the locale's separator.
 	for l, r := 0, len(chunks)-1; l < r; l, r = l+1, r-1 {
 		chunks[l], chunks[r] = chunks[r], chunks[l]
 	}
-	return strings.Join(chunks, "\x00") // placeholder; replaced by symbol later
+	return strings.Join(chunks, ld.Sym.Group)
 }
 
 type groupMode int
@@ -423,8 +430,9 @@ func groupingMode(o *Options) groupMode {
 
 // wrapPattern applies prefix/suffix from the (positive or negative) subpattern,
 // substitutes locale symbols and currency markers, applies digit substitution
-// for non-latn numbering systems, and returns the final string.
-func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, style, display string, cur currencyInfo, plCat string) string {
+// for non-latn numbering systems, and returns the final string. The body is
+// already fully localized (group and decimal separators substituted).
+func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, rc renderCtx) string {
 	pos, neg := splitSubpatterns(pattern)
 	var sub subpattern
 	var minus string
@@ -440,12 +448,6 @@ func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, style
 	} else {
 		sub = pos
 	}
-
-	// Replace the decimal point FIRST (the body's only literal '.'), then
-	// expand grouping placeholders. Doing it in this order avoids confusing a
-	// just-inserted group separator that may itself be '.' (e.g. de/es).
-	body = strings.Replace(body, ".", ld.Sym.Decimal, 1)
-	body = strings.ReplaceAll(body, "\x00", ld.Sym.Group)
 
 	prefix := sub.prefix
 	suffix := sub.suffix
@@ -463,11 +465,11 @@ func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, style
 	out = strings.ReplaceAll(out, "%", ld.Sym.Percent)
 
 	// Currency handling.
-	if style == "currency" {
-		if display == "name" {
-			out = applyCurrencyName(ld, out, cur, plCat)
+	if rc.style == "currency" {
+		if rc.display == "name" {
+			out = applyCurrencyName(ld, out, rc.cur, rc.plCat)
 		} else {
-			out = insertCurrencySymbol(ld, out, cur, display)
+			out = insertCurrencySymbol(ld, out, rc.cur, rc.display)
 		}
 	}
 
