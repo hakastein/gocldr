@@ -1,6 +1,6 @@
-// Package cldr holds CLDR-derived tables shared by the number and datetime code
-// generators (both //go:build ignore programs run via `go run`). It is gen-only
-// and not imported by any runtime package.
+// Package cldr holds CLDR-derived tables and helpers shared by the code
+// generators (number, datetime and the locales umbrella). It is gen-only and
+// not imported by any runtime package.
 package cldr
 
 // ICUNumberingOverride pins the default numbering system for locales where ICU

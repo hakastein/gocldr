@@ -1,12 +1,11 @@
 // Package number provides CLDR-driven number, percent and currency formatting
 // for Go, generated directly from the Unicode CLDR data (cldr-numbers-full and
-// cldr-core). It has ZERO external dependencies and is designed to match the
-// behaviour of JavaScript's Intl.NumberFormat (ECMA-402) as closely as possible.
+// cldr-core). It has no external runtime dependencies and is designed to match
+// the behaviour of JavaScript's Intl.NumberFormat (ECMA-402) as closely as
+// possible.
 //
-// The locale tables in tables_gen.go are produced by the generator in
-// internal/gen. To regenerate them, run:
-//
-//	go generate ./number/...
+// The per-locale tables in number/locales/<tag> are produced by the generator
+// in internal/gen; regenerate them with `make gen`.
 package number
 
 import (
@@ -16,6 +15,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/hakastein/gocldr/internal/decimal"
+	"github.com/hakastein/gocldr/internal/digits"
 	"github.com/hakastein/gocldr/number/internal/data"
 )
 
@@ -64,18 +64,11 @@ func Format(locale string, value float64, opts Options) string {
 		style = "decimal"
 	}
 
-	// Resolve currency metadata up front (needed for default fraction digits).
 	var cur currencyInfo
 	if style == "currency" {
 		cur = resolveCurrency(ld, opts.Currency)
 	}
 
-	// Handle non-finite values the way Intl does.
-	if math.IsNaN(value) {
-		return ld.Sym.NaN
-	}
-
-	// Pick the base pattern.
 	display := opts.CurrencyDisplay
 	if display == "" {
 		display = "symbol"
@@ -95,11 +88,10 @@ func Format(locale string, value float64, opts Options) string {
 	default:
 		pattern = ld.Decimal
 	}
+	pos, neg := splitSubpatterns(pattern)
 
-	// Resolve digit-count options into concrete values.
 	rs := resolveRounding(style, &opts, cur)
 
-	// Percent multiplies by 100.
 	scaled := value
 	if style == "percent" {
 		scaled = value * 100
@@ -107,11 +99,14 @@ func Format(locale string, value float64, opts Options) string {
 
 	rc := renderCtx{style: style, display: display, cur: cur}
 
+	// NaN renders unsigned regardless of the sign bit, matching Intl.
+	if math.IsNaN(value) {
+		return wrapPattern(ld, pos, neg, ld.Sym.NaN, false, rc)
+	}
 	if math.IsInf(scaled, 0) {
-		return wrapPattern(ld, pattern, ld.Sym.Infinity, math.Signbit(scaled), rc)
+		return wrapPattern(ld, pos, neg, ld.Sym.Infinity, math.Signbit(scaled), rc)
 	}
 
-	// Format the magnitude into integer/fraction digit strings.
 	intPart, fracPart := formatMagnitude(math.Abs(scaled), rs)
 
 	// Preserve the sign bit even when the magnitude rounds to zero: Intl renders
@@ -120,7 +115,7 @@ func Format(locale string, value float64, opts Options) string {
 	// Assemble the localized body: group separators and the decimal separator
 	// are substituted here, so downstream steps never have to disambiguate a
 	// '.' that could mean either (e.g. de groups with '.').
-	body := applyGrouping(ld, pattern, intPart, &opts)
+	body := applyGrouping(ld, pos.body, intPart, &opts)
 	if fracPart != "" {
 		body += ld.Sym.Decimal + fracPart
 	}
@@ -131,7 +126,7 @@ func Format(locale string, value float64, opts Options) string {
 		rc.plCat = pluralCategoryForDigits(locale, intPart, fracPart)
 	}
 
-	return wrapPattern(ld, pattern, body, negative, rc)
+	return wrapPattern(ld, pos, neg, body, negative, rc)
 }
 
 // renderCtx carries the resolved style/currency context through wrapPattern.
@@ -194,10 +189,6 @@ func resolveRounding(style string, o *Options, cur currencyInfo) roundSpec {
 	rs.maxFr = defMax
 	if o.MinimumFractionDigits != nil {
 		rs.minFr = *o.MinimumFractionDigits
-		// When only the minimum is set, the maximum rises to at least it.
-		if o.MaximumFractionDigits == nil && rs.maxFr < rs.minFr {
-			rs.maxFr = rs.minFr
-		}
 	}
 	if o.MaximumFractionDigits != nil {
 		rs.maxFr = *o.MaximumFractionDigits
@@ -236,7 +227,7 @@ func formatMagnitude(abs float64, rs roundSpec) (string, string) {
 	intPart, fracPart := decimal.RoundFixed(abs, rs.maxFr)
 
 	// Trim trailing zeros down to minFr.
-	fracPart = trimFracTo(fracPart, rs.minFr)
+	fracPart = decimal.TrimFrac(fracPart, rs.minFr)
 
 	// Pad integer to minimumIntegerDigits.
 	intPart = padInt(intPart, rs.minInt)
@@ -251,10 +242,7 @@ func formatMagnitude(abs float64, rs roundSpec) (string, string) {
 // digit, rounds at the maxSig boundary, then places the decimal point.
 func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string) {
 	if abs == 0 {
-		intPart := "0"
-		if minInt > 1 {
-			intPart = strings.Repeat("0", minInt)
-		}
+		intPart := padInt("0", minInt)
 		fracDigits := minSig - 1
 		if fracDigits <= 0 {
 			return intPart, ""
@@ -297,9 +285,7 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 		}
 	}
 	// Trim trailing zeros, but keep at least minSig significant digits.
-	for len(sig) > minSig && sig[len(sig)-1] == '0' {
-		sig = sig[:len(sig)-1]
-	}
+	sig = decimal.TrimFrac(sig, minSig)
 	// Pad to minSig significant digits.
 	if len(sig) < minSig {
 		sig += strings.Repeat("0", minSig-len(sig))
@@ -325,19 +311,6 @@ func formatSignificant(abs float64, minSig, maxSig, minInt int) (string, string)
 	return resInt, resFrac
 }
 
-// trimFracTo trims trailing zeros from frac but never below minFr digits.
-func trimFracTo(frac string, minFr int) string {
-	end := len(frac)
-	for end > minFr && frac[end-1] == '0' {
-		end--
-	}
-	frac = frac[:end]
-	if len(frac) < minFr {
-		frac += strings.Repeat("0", minFr-len(frac))
-	}
-	return frac
-}
-
 // padInt left-pads an integer digit string with zeros to at least minInt.
 func padInt(intPart string, minInt int) string {
 	if len(intPart) < minInt {
@@ -347,14 +320,14 @@ func padInt(intPart string, minInt int) string {
 }
 
 // applyGrouping inserts the locale group separator into the integer digit
-// string per the pattern's grouping sizes and the grouping options.
-func applyGrouping(ld *data.LocaleData, pattern, intPart string, o *Options) string {
+// string per the pattern body's grouping sizes and the grouping options.
+func applyGrouping(ld *data.LocaleData, posBody, intPart string, o *Options) string {
 	mode := groupingMode(o)
 	if mode == groupOff {
 		return intPart
 	}
 
-	prim, sec := patternGroupSizes(pattern)
+	prim, sec := patternGroupSizes(posBody)
 	if prim == 0 {
 		return intPart
 	}
@@ -381,11 +354,7 @@ func applyGrouping(ld *data.LocaleData, pattern, intPart string, o *Options) str
 	chunks = append(chunks, intPart[i-prim:i])
 	i -= prim
 	for i > 0 {
-		size := sec
-		if size <= 0 {
-			size = prim
-		}
-		start := i - size
+		start := i - sec
 		if start < 0 {
 			start = 0
 		}
@@ -415,10 +384,7 @@ func groupingMode(o *Options) groupMode {
 	case "min2":
 		return groupMin2
 	case "auto", "true", "false":
-		// ECMA-402 quirk: the string forms "true" and "false" are legacy
-		// aliases for the default "auto" — Intl.NumberFormat('en',
-		// {useGrouping:'false'}) still groups; only the BOOLEAN false
-		// disables grouping.
+		// "true"/"false" are legacy aliases of "auto"; see Options.UseGroupingMode.
 		return groupAuto
 	}
 	if o.UseGrouping != nil {
@@ -434,8 +400,7 @@ func groupingMode(o *Options) groupMode {
 // substitutes locale symbols and currency markers, applies digit substitution
 // for non-latn numbering systems, and returns the final string. The body is
 // already fully localized (group and decimal separators substituted).
-func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, rc renderCtx) string {
-	pos, neg := splitSubpatterns(pattern)
+func wrapPattern(ld *data.LocaleData, pos, neg subpattern, body string, negative bool, rc renderCtx) string {
 	var sub subpattern
 	var minus string
 	usedNegSub := false
@@ -466,7 +431,6 @@ func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, rc re
 	// The '%' literal in a pattern maps to the locale percentSign.
 	out = strings.ReplaceAll(out, "%", ld.Sym.Percent)
 
-	// Currency handling.
 	if rc.style == "currency" {
 		if rc.display == "name" {
 			out = applyCurrencyName(ld, out, rc.cur, rc.plCat)
@@ -475,29 +439,7 @@ func wrapPattern(ld *data.LocaleData, pattern, body string, negative bool, rc re
 		}
 	}
 
-	// Digit substitution for non-latn numbering systems.
-	if ld.Digits != "" {
-		out = substituteDigits(out, ld.Digits)
-	}
-	return out
-}
-
-// substituteDigits maps ASCII digits 0-9 to the numbering system's digit runes.
-func substituteDigits(s, digits string) string {
-	dr := []rune(digits)
-	if len(dr) != 10 {
-		return s
-	}
-	var b strings.Builder
-	b.Grow(len(s) * 2)
-	for _, r := range s {
-		if r >= '0' && r <= '9' {
-			b.WriteRune(dr[r-'0'])
-		} else {
-			b.WriteRune(r)
-		}
-	}
-	return b.String()
+	return digits.Substitute(out, []rune(ld.Digits))
 }
 
 // insertCurrencySymbol replaces the ¤ marker with the chosen currency display
@@ -511,9 +453,6 @@ func insertCurrencySymbol(ld *data.LocaleData, s string, cur currencyInfo, displ
 		symbol = cur.code
 	default:
 		symbol = cur.symbol
-	}
-	if symbol == "" {
-		symbol = cur.code
 	}
 
 	idx := strings.IndexRune(s, '¤')
@@ -534,12 +473,12 @@ func insertCurrencySymbol(ld *data.LocaleData, s string, cur currencyInfo, displ
 	// bordering char is not a symbol/separator, insert the locale's
 	// insertBetween (typically a NBSP / space).
 	if symbolBefore {
-		if symbol != "" && needCurrencySpacing(lastRune(symbol), firstRune(after)) {
+		if needCurrencySpacing(lastRune(symbol), firstRune(after)) {
 			return before + symbol + ld.SpacingBefore + after
 		}
 		return before + symbol + after
 	}
-	if symbol != "" && needCurrencySpacing(firstRune(symbol), lastRune(before)) {
+	if needCurrencySpacing(firstRune(symbol), lastRune(before)) {
 		return before + ld.SpacingAfter + symbol + after
 	}
 	return before + symbol + after

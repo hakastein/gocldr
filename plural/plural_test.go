@@ -28,6 +28,10 @@ func TestOperandsFromString(t *testing.T) {
 		{name: "compact with fraction", in: "1.0000001c6", want: plural.Operands{N: 1000000.1, I: 1000000, V: 1, W: 1, F: 1, T: 1, C: 6}},
 		{name: "scientific exponent (e alias)", in: "1.2e6", want: plural.Operands{N: 1200000, I: 1200000, C: 6}},
 		{name: "negative exponent shifts left", in: "1.5e-3", want: plural.Operands{N: 0.0015, I: 0, V: 4, W: 4, F: 15, T: 15, C: -3}},
+		// Digit runs beyond int64 contribute their last 18 digits to I/F/T
+		// (ICU's n mod 1e18); V/W still count every digit.
+		{name: "integer overflow keeps last 18 digits", in: "9300000000000000000", want: plural.Operands{N: 9.3e18, I: 300000000000000000}},
+		{name: "fraction overflow keeps last 18 digits", in: "0.99999999999999999999", want: plural.Operands{N: 1, V: 20, W: 20, F: 999999999999999999, T: 999999999999999999}},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -55,8 +59,9 @@ func TestOperandsFromStringErrors(t *testing.T) {
 		{"dangling exponent", "1e"},
 		{"fractional exponent", "1e1.5"},
 		{"double sign", "+-1"},
-		{"integer part overflows int64", "9223372036854775808"},
-		{"fraction part overflows int64", "0.99999999999999999999"},
+		{"huge positive exponent", "1c9000000000000000000"},
+		{"huge negative exponent", "1c-9000000000000000000"},
+		{"moderately huge exponent", "1c2000000000"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -131,6 +136,14 @@ func TestNewOperandsEdgeInputs(t *testing.T) {
 		o := plural.NewOperands(1.5, 3, 1)
 		assert.Equal(t, plural.Operands{N: 1.5, I: 1, V: 3, W: 1, F: 500, T: 5}, o)
 	})
+	t.Run("huge maxFrac clamps to 100", func(t *testing.T) {
+		o := plural.NewOperands(1.5, 0, 1<<62)
+		assert.Equal(t, plural.Operands{N: 1.5, I: 1, V: 1, W: 1, F: 5, T: 5}, o)
+	})
+	t.Run("huge minFrac clamps to 100", func(t *testing.T) {
+		o := plural.NewOperands(1.5, 1<<62, 1<<62)
+		assert.Equal(t, 1.5, o.N)
+	})
 	t.Run("NaN", func(t *testing.T) {
 		o := plural.NewOperands(math.NaN(), 0, 0)
 		assert.True(t, math.IsNaN(o.N))
@@ -141,6 +154,30 @@ func TestNewOperandsEdgeInputs(t *testing.T) {
 		assert.True(t, math.IsInf(o.N, 1), "operands are defined on the absolute value")
 		assert.Equal(t, plural.Other, plural.CardinalFor("en", math.Inf(1), 0, 0))
 	})
+}
+
+// TestHugeNumberCategories pins category selection for values whose digit
+// strings exceed int64: operands degrade the way ICU's do (I/F/T from the
+// last 18 digits, V/W intact), so the category matches Intl.PluralRules.
+// Expected values are confirmed against Node's Intl.PluralRules.
+func TestHugeNumberCategories(t *testing.T) {
+	tests := []struct {
+		name       string
+		locale     string
+		n          float64
+		minF, maxF int
+		want       plural.Category
+	}{
+		{name: "fr 9.3e18 -> many", locale: "fr", n: 9.3e18, want: plural.Many},
+		{name: "fr 1e20 -> one", locale: "fr", n: 1e20, want: plural.One},
+		{name: "ru 2^63 -> many", locale: "ru", n: 1 << 63, want: plural.Many},
+		{name: "ru 0.5 with 20 fraction digits -> other", locale: "ru", n: 0.5, minF: 20, maxF: 20, want: plural.Other},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, plural.CardinalFor(tc.locale, tc.n, tc.minF, tc.maxF))
+		})
+	}
 }
 
 // TestLocaleLookupRobustness pins lookup behavior for garbage and sloppy

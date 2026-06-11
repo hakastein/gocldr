@@ -5,9 +5,7 @@
 // the dateStyle/timeStyle styles and the common component options.
 //
 // The symbol/pattern tables in tables_gen.go are produced by the generator in
-// internal/gen. To regenerate them, run:
-//
-//	go generate ./datetime/...
+// internal/gen. Regenerate them with `make gen` (pinned Docker toolchain).
 //
 // Usage:
 //
@@ -48,7 +46,7 @@ type Options struct {
 	FractionalSecondDigits *int   // 1..3
 	Calendar               string // only the Gregorian calendar is implemented; other values are ignored
 	NumberingSystem        string // overrides the locale default
-	TimeZone               string // IANA name; defaults to local
+	TimeZone               string // IANA name; an unrecognized name falls back to UTC; empty formats t in the zone it carries
 }
 
 // resolveLocale walks the CLDR fallback chain to find a locale registered in
@@ -85,27 +83,38 @@ func Format(locale string, t time.Time, opts Options) string {
 		return t.Format(time.RFC3339)
 	}
 
-	// Apply timeZone.
+	if opts.FractionalSecondDigits != nil {
+		if n := *opts.FractionalSecondDigits; n < 1 || n > 3 {
+			opts.FractionalSecondDigits = nil
+		}
+	}
+
 	zoneID := ""
 	canonicalZone := ""
 	observesDST := false
 	if opts.TimeZone != "" {
-		if loc, err := time.LoadLocation(opts.TimeZone); err == nil {
-			t = t.In(loc)
-			canonicalZone = opts.TimeZone
-			zoneID = cldrZoneID(opts.TimeZone)
-			observesDST = zoneObservesDST(t)
+		loc, err := time.LoadLocation(opts.TimeZone)
+		if err != nil {
+			opts.TimeZone = "UTC"
+			loc = time.UTC
 		}
+		t = t.In(loc)
+		canonicalZone = opts.TimeZone
+		zoneID = cldrZoneID(opts.TimeZone)
+		observesDST = zoneObservesDST(t)
 	}
 
-	// Numbering system: option overrides locale default.
+	zoneName, off := t.Zone()
+	isUTC := off == 0 && (zoneName == "UTC" || zoneName == "" ||
+		strings.EqualFold(opts.TimeZone, "UTC") || strings.EqualFold(opts.TimeZone, "Etc/UTC"))
+
 	ns := opts.NumberingSystem
 	if ns == "" {
 		ns = ld.NumberingSystem
 	}
 	digits := numberingSystemDigits[ns]
 
-	ctx := &formatCtx{ld: ld, locale: resolved, digits: digits, opts: opts, zoneID: zoneID, canonicalZone: canonicalZone, zoneObservesDST: observesDST}
+	ctx := &formatCtx{ld: ld, locale: resolved, digits: digits, opts: opts, zoneID: zoneID, canonicalZone: canonicalZone, zoneObservesDST: observesDST, isUTC: isUTC}
 
 	pattern := ctx.resolvePattern()
 	out := ctx.interpret(pattern, t)
@@ -132,12 +141,7 @@ func (c *formatCtx) resolvePattern() string {
 		}
 		switch {
 		case hasDate && hasTime:
-			// Intl combines via dateTimeFormats-atTime, keyed by dateStyle.
-			combiner := c.ld.AtTime[o.DateStyle]
-			if combiner == "" {
-				combiner = c.ld.DateTime[o.DateStyle]
-			}
-			return combine(combiner, datePat, timePat)
+			return c.combineDateTime(o.DateStyle, datePat, timePat)
 		case hasDate:
 			return datePat
 		default:
@@ -148,17 +152,17 @@ func (c *formatCtx) resolvePattern() string {
 	// Component options -> build skeleton, best-match against availableFormats.
 	skel := c.buildSkeleton()
 	if skel == "" {
+		if o.FractionalSecondDigits != nil {
+			// Fraction-only request: Intl renders the bare fraction.
+			return strings.Repeat("S", *o.FractionalSecondDigits)
+		}
 		// No options at all: Intl defaults to numeric y/M/d.
 		skel = "yMd"
 	}
 	pat := c.bestMatch(skel)
 	pat = c.applyHourCycle(pat)
-	// Specific (z) and offset (O/X/Z) zone names attach to the time with a plain
-	// space when NO seconds are shown. CLDR's only zone-bearing availableFormats
-	// are generic (v/vvvv); a few locales separate them with a comma (e.g. cs
-	// "H:mm, vvvv"), which Intl keeps for generic names and for the with-seconds
-	// specific pattern, but replaces with a space for the without-seconds
-	// specific/offset case. Normalize only that case.
+	// Without seconds, specific/offset zone names attach with a plain space;
+	// see normalizeZoneSeparator.
 	if o.Second == "" {
 		switch o.TimeZoneName {
 		case "short", "long", "shortOffset", "longOffset":
@@ -169,7 +173,7 @@ func (c *formatCtx) resolvePattern() string {
 	// synthesis never carries the S field into the resolved pattern. Mirror ICU's
 	// adjustFieldTypes by injecting the fractional-second field adjacent to the
 	// seconds field after matching.
-	if o.FractionalSecondDigits != nil && *o.FractionalSecondDigits > 0 {
+	if o.FractionalSecondDigits != nil {
 		pat = c.injectFractionalSecond(pat, *o.FractionalSecondDigits)
 	}
 	return pat
@@ -181,35 +185,36 @@ func (c *formatCtx) resolvePattern() string {
 // separator is emitted as a pattern literal; CLDR decimal separators are
 // punctuation, so they pass through interpret unquoted.
 func (c *formatCtx) injectFractionalSecond(pattern string, digits int) string {
-	runes := []rune(pattern)
-	n := len(runes)
-	inQuote := false
-	// Find the end of the last unquoted seconds run.
-	end := -1
-	for i := 0; i < n; i++ {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			continue
-		}
-		if !inQuote && ch == 's' {
-			j := i
-			for j < n && runes[j] == 's' {
-				j++
-			}
-			end = j
-			i = j - 1
+	toks := tokenizePattern(pattern)
+	last := -1
+	for i, tok := range toks {
+		if tok.letter == 's' {
+			last = i
 		}
 	}
-	if end < 0 {
+	if last < 0 {
 		return pattern
 	}
-	sep := c.ld.DecimalSep
-	if sep == "" {
-		sep = "."
+	var b strings.Builder
+	for i, tok := range toks {
+		b.WriteString(tok.text)
+		if i == last {
+			b.WriteString(c.ld.DecimalSep)
+			b.WriteString(strings.Repeat("S", digits))
+		}
 	}
-	frac := sep + strings.Repeat("S", digits)
-	return string(runes[:end]) + frac + string(runes[end:])
+	return b.String()
+}
+
+// combineDateTime joins a date and a time pattern with the locale's
+// dateTimeFormats connector for the given style. Intl prefers the
+// dateTimeFormats-atTime connector, keyed by the date style.
+func (c *formatCtx) combineDateTime(style, datePat, timePat string) string {
+	conn := c.ld.AtTime[style]
+	if conn == "" {
+		conn = c.ld.DateTime[style]
+	}
+	return combine(conn, datePat, timePat)
 }
 
 // combine substitutes {1}=date and {0}=time into a CLDR combiner pattern,
@@ -219,30 +224,15 @@ func combine(combiner, datePat, timePat string) string {
 		return strings.TrimSpace(datePat + " " + timePat)
 	}
 	var b strings.Builder
-	inQuote := false
-	runes := []rune(combiner)
-	for i := 0; i < len(runes); i++ {
-		ch := runes[i]
-		if ch == '\'' {
-			// Keep quote markers verbatim so the interpreter treats the literal
-			// segment as a literal too.
-			inQuote = !inQuote
-			b.WriteRune(ch)
-			continue
+	for _, tok := range tokenizePattern(combiner) {
+		text := tok.text
+		// Quoted literals keep their markers verbatim so the interpreter still
+		// treats the segment as a literal; placeholders inside them stay text.
+		if tok.letter == 0 && !strings.HasPrefix(text, "'") {
+			text = strings.ReplaceAll(text, "{0}", timePat)
+			text = strings.ReplaceAll(text, "{1}", datePat)
 		}
-		if !inQuote && ch == '{' && i+2 < len(runes) && runes[i+2] == '}' {
-			switch runes[i+1] {
-			case '0':
-				b.WriteString(timePat)
-				i += 2
-				continue
-			case '1':
-				b.WriteString(datePat)
-				i += 2
-				continue
-			}
-		}
-		b.WriteRune(ch)
+		b.WriteString(text)
 	}
 	return b.String()
 }

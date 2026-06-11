@@ -1,7 +1,6 @@
 // Package locale provides the BCP-47 / CLDR locale-tag canonicalisation and
 // the CLDR fallback walk shared by the formatter packages (and their
-// generators). Keeping a single implementation guarantees that plural
-// selection and number/datetime formatting resolve the same tag identically.
+// generators).
 package locale
 
 import "strings"

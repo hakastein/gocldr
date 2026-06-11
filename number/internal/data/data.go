@@ -7,11 +7,6 @@
 // of those packages registers its locale's data from an init() via Register;
 // the number core then looks it up with Lookup. A program links only the locale
 // packages it (blank-)imports, so the data it pulls in is just what it uses.
-//
-// The record is fully resolved and de-interned: every field (including the
-// per-locale Currencies map) already has CLDR inheritance applied at generation
-// time, so the number runtime needs no shared pools or fallback walk over the
-// currency display data.
 package data
 
 // Symbols holds the locale's number symbols actually used by the formatter.
@@ -20,13 +15,12 @@ type Symbols struct {
 	Group    string
 	Minus    string
 	Percent  string
-	Plus     string
 	NaN      string
 	Infinity string
 }
 
-// CurrencyDisplay holds the fully-resolved currency display data for one ISO
-// code in one locale (CLDR inheritance pre-applied by the generator).
+// CurrencyDisplay holds the currency display data for one ISO code in one
+// locale.
 type CurrencyDisplay struct {
 	Symbol string
 	Narrow string

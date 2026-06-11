@@ -14,22 +14,30 @@ func ptrInt(i int) *int    { return &i }
 func ptrBool(b bool) *bool { return &b }
 
 // TestSpecialValues covers non-finite inputs, which Intl renders via locale
-// symbols.
+// symbols inside the style's pattern affixes (e.g. "NaN%", "$NaN"). Golden
+// fixtures cannot encode NaN (JSON), so these cases are pinned here.
 func TestSpecialValues(t *testing.T) {
 	tests := []struct {
 		name   string
 		locale string
 		value  float64
+		opts   number.Options
 		want   string
 	}{
 		{name: "en NaN", locale: "en", value: math.NaN(), want: "NaN"},
 		{name: "en +Inf", locale: "en", value: math.Inf(1), want: "∞"},
 		{name: "en -Inf", locale: "en", value: math.Inf(-1), want: "-∞"},
 		{name: "de NaN", locale: "de", value: math.NaN(), want: "NaN"},
+		{name: "en NaN percent", locale: "en", value: math.NaN(), opts: number.Options{Style: "percent"}, want: "NaN%"},
+		{name: "en NaN currency symbol", locale: "en", value: math.NaN(), opts: number.Options{Style: "currency", Currency: "USD"}, want: "$NaN"},
+		{name: "en NaN currency name", locale: "en", value: math.NaN(), opts: number.Options{Style: "currency", Currency: "USD", CurrencyDisplay: "name"}, want: "NaN US dollars"},
+		{name: "de NaN currency", locale: "de", value: math.NaN(), opts: number.Options{Style: "currency", Currency: "EUR"}, want: "NaN €"},
+		{name: "sign-bit NaN stays unsigned", locale: "en", value: math.Copysign(math.NaN(), -1), opts: number.Options{Style: "percent"}, want: "NaN%"},
+		{name: "en +Inf percent", locale: "en", value: math.Inf(1), opts: number.Options{Style: "percent"}, want: "∞%"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := number.Format(tc.locale, tc.value, number.Options{})
+			got := number.Format(tc.locale, tc.value, tc.opts)
 			assert.Equal(t, tc.want, got)
 		})
 	}

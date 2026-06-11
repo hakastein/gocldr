@@ -1,26 +1,24 @@
-// Command gen reads the CLDR gregorian calendar data (cldr-dates-full) plus a
-// few supplemental files (cldr-core, cldr-numbers-full) and emits a generated
-// Go source file (tables_gen.go) for package datetime.
+// Command gen reads the Unicode CLDR gregorian calendar data (cldr-dates-full)
+// plus supplemental files (cldr-core, cldr-numbers-full, cldr-localenames-full,
+// cldr-bcp47) and emits the datetime locale data.
 //
-// It is invoked via the //go:generate directive in datetime.go:
+// The output is split:
 //
-//	go generate ./datetime/...
+//   - The small shared core table is written to -out (tables_gen.go, package
+//     datetime): numbering-system digits, parent locales and the global zone
+//     maps (zone -> metazone periods, zone -> territory, the
+//     country-representative zone set).
+//   - One self-registering package per locale at locales/<tag>/data_gen.go
+//     (package locale), carrying that locale's data.LocaleData: month / day /
+//     era / dayPeriod / quarter names, date/time/dateTime formats (incl. the
+//     availableFormats skeleton map and the atTime combining patterns), the
+//     default numbering system and the zone names. A program links only the
+//     locales it imports.
+//   - locales/all/all_gen.go (package all) blank-imports every per-locale
+//     package for callers that want the full set.
 //
-// The CLDR input location is taken from the CLDR_DATA environment variable (the
-// path to a node_modules tree containing cldr-dates-full, cldr-numbers-full and
-// cldr-core), set by the pinned gen image; the generator is fatal if it is
-// unset. The -dates/-numbers/-core flags still override the individual derived
-// subdirectories.
-//
-// The generated file contains, per locale:
-//   - month / day / era / dayPeriod / quarter names (all width variants),
-//   - dateFormats / timeFormats / dateTimeFormats (incl. the availableFormats
-//     skeleton map and the atTime combining patterns),
-//   - the default numbering system and the UTC zone names.
-//
-// Locales whose data blob is byte-identical are mapped to a single shared
-// entry to keep the output small. The CLDR parentLocale map is also emitted so
-// the runtime can resolve locales that are missing from the table.
+// CLDR input paths derive from $CLDR_DATA (set by the pinned gen image; run
+// via `make gen`, never on the host).
 package main
 
 import (
@@ -37,81 +35,50 @@ import (
 	"time"
 
 	"github.com/hakastein/gocldr/internal/cldr"
+	"github.com/hakastein/gocldr/internal/locale"
 )
 
 func main() {
 	log.SetFlags(0)
-	datesDir := flag.String("dates", "", "path to cldr-dates-full/main (overrides $CLDR_DATA)")
-	numbersDir := flag.String("numbers", "", "path to cldr-numbers-full/main (overrides $CLDR_DATA)")
-	coreDir := flag.String("core", "", "path to cldr-core/supplemental (overrides $CLDR_DATA)")
-	namesDir := flag.String("names", "", "path to cldr-localenames-full/main (overrides $CLDR_DATA)")
-	bcp47Path := flag.String("bcp47", "", "path to cldr-bcp47/bcp47/timezone.json (overrides $CLDR_DATA)")
 	outPath := flag.String("out", "tables_gen.go", "output Go file")
 	flag.Parse()
 
-	// The per-subdirectory paths derive from $CLDR_DATA (set by the pinned gen
-	// image); each can still be overridden individually via its flag.
-	base := os.Getenv("CLDR_DATA")
-	if base == "" {
-		log.Fatal("gen: CLDR_DATA is unset; run via `make gen`, never on the host")
-	}
-	if *datesDir == "" {
-		*datesDir = filepath.Join(base, "cldr-dates-full", "main")
-	}
-	if *numbersDir == "" {
-		*numbersDir = filepath.Join(base, "cldr-numbers-full", "main")
-	}
-	if *coreDir == "" {
-		*coreDir = filepath.Join(base, "cldr-core", "supplemental")
-	}
-	if *namesDir == "" {
-		*namesDir = filepath.Join(base, "cldr-localenames-full", "main")
-	}
-	if *bcp47Path == "" {
-		*bcp47Path = filepath.Join(base, "cldr-bcp47", "bcp47", "timezone.json")
-	}
+	base := cldr.MustDataDir()
+	datesDir := filepath.Join(base, "cldr-dates-full", "main")
+	coreDir := filepath.Join(base, "cldr-core", "supplemental")
 
-	numSys := cldr.LoadNumberingSystems(filepath.Join(*coreDir, "numberingSystems.json"))
-	parents := cldr.LoadParentLocales(filepath.Join(*coreDir, "parentLocales.json"))
-	defaultNS, decimalSep := loadNumberFormatInfo(*numbersDir)
-	dpRules := loadDayPeriodRules(filepath.Join(*coreDir, "dayPeriods.json"))
-	zoneMeta := loadMetazoneInfo(filepath.Join(*coreDir, "metaZones.json"))
-	primaryZones := loadPrimaryZones(filepath.Join(*coreDir, "primaryZones.json"))
+	numSys := cldr.LoadNumberingSystems(filepath.Join(coreDir, "numberingSystems.json"))
+	parents := cldr.LoadParentLocales(filepath.Join(coreDir, "parentLocales.json"))
+	numberInfo := loadNumberFormatInfo(filepath.Join(base, "cldr-numbers-full", "main"))
+	dpRules := loadDayPeriodRules(filepath.Join(coreDir, "dayPeriods.json"))
+	zoneMeta := loadMetazoneInfo(filepath.Join(coreDir, "metaZones.json"))
+	primaryZones := loadPrimaryZones(filepath.Join(coreDir, "primaryZones.json"))
 
 	// Zone -> territory and the set of zones whose generic LOCATION name uses
 	// the COUNTRY (territory) display name rather than the exemplar city: a zone
 	// is "country-representative" when its territory has a single (non-deprecated)
 	// time zone OR the zone is that territory's primaryZone. Derived from the
 	// BCP-47 timezone alias table plus primaryZones.json (mirrors ICU).
-	zoneToTerritory, repTerritories := loadZoneTerritories(*bcp47Path, primaryZones)
+	zoneToTerritory, repTerritories := loadZoneTerritories(filepath.Join(base, "cldr-bcp47", "bcp47", "timezone.json"), primaryZones)
 	// Per-locale territory display names, limited to the country-representative
 	// set so the generated table stays small.
-	territoryNames := loadTerritoryNames(*namesDir, parents, repTerritories)
+	territoryNames := loadTerritoryNames(filepath.Join(base, "cldr-localenames-full", "main"), parents, repTerritories)
 
-	locales := listLocales(*datesDir)
+	locales := listLocales(datesDir)
 	sort.Strings(locales)
 
-	type entry struct {
-		locale string
-		data   localeData
-	}
-	var entries []entry
+	dataByLocale := map[string]localeData{}
+	var tags []string
 	for _, loc := range locales {
-		d, ok := loadLocale(*datesDir, loc)
+		d, ok := loadLocale(datesDir, loc)
 		if !ok {
 			continue
 		}
-		d.NumberingSystem = defaultNS[loc]
-		if d.NumberingSystem == "" {
-			d.NumberingSystem = "latn"
-		}
-		d.DecimalSep = decimalSep[loc]
-		if d.DecimalSep == "" {
-			d.DecimalSep = "."
-		}
+		d.NumberingSystem, d.DecimalSep = numberInfo(loc)
 		d.DayPeriodRules = resolveDayPeriodRules(dpRules, loc)
 		d.TerritoryNames = territoryNames[loc]
-		entries = append(entries, entry{locale: loc, data: d})
+		dataByLocale[loc] = d
+		tags = append(tags, loc)
 	}
 
 	var buf bytes.Buffer
@@ -119,46 +86,26 @@ func main() {
 	buf.WriteString("// Source: Unicode CLDR cldr-dates-full / cldr-numbers-full / cldr-core.\n\n")
 	buf.WriteString("package datetime\n\n")
 
-	// numbering system digits
 	buf.WriteString("// numberingSystemDigits maps a CLDR numeric numbering system to its ten\n")
 	buf.WriteString("// digit glyphs (index 0..9).\n")
 	buf.WriteString("var numberingSystemDigits = map[string][]rune{\n")
-	var nsKeys []string
-	for k := range numSys {
-		nsKeys = append(nsKeys, k)
-	}
-	sort.Strings(nsKeys)
-	for _, k := range nsKeys {
+	for _, k := range cldr.SortedKeys(numSys) {
 		buf.WriteString(fmt.Sprintf("\t%q: []rune(%q),\n", k, numSys[k]))
 	}
 	buf.WriteString("}\n\n")
 
-	// parent locales
 	buf.WriteString("// parentLocaleMap is the CLDR explicit parentLocale fallback map.\n")
 	buf.WriteString("var parentLocaleMap = map[string]string{\n")
-	var pKeys []string
-	for k := range parents {
-		pKeys = append(pKeys, k)
-	}
-	sort.Strings(pKeys)
-	for _, k := range pKeys {
+	for _, k := range cldr.SortedKeys(parents) {
 		buf.WriteString(fmt.Sprintf("\t%q: %q,\n", k, parents[k]))
 	}
 	buf.WriteString("}\n\n")
 
-	// global zone -> metazone mapping (populates the var declared in zone.go).
-	buf.WriteString("// zoneToMetazone (declared in zone.go) maps a CLDR (legacy) zone id to its\n")
-	buf.WriteString("// ordered metazone periods. Assigned here so the package still builds\n")
-	buf.WriteString("// against an older table that predates this data.\n")
-	buf.WriteString("func init() {\n")
-	buf.WriteString("\tzoneToMetazone = map[string][]metazonePeriod{\n")
-	var zKeys []string
-	for k := range zoneMeta {
-		zKeys = append(zKeys, k)
-	}
-	sort.Strings(zKeys)
-	for _, k := range zKeys {
-		buf.WriteString(fmt.Sprintf("\t\t%q: {", k))
+	buf.WriteString("// zoneToMetazone maps a CLDR (legacy) zone id to its ordered metazone\n")
+	buf.WriteString("// periods.\n")
+	buf.WriteString("var zoneToMetazone = map[string][]metazonePeriod{\n")
+	for _, k := range cldr.SortedKeys(zoneMeta) {
+		buf.WriteString(fmt.Sprintf("\t%q: {", k))
 		for i, p := range zoneMeta[k] {
 			if i > 0 {
 				buf.WriteString(", ")
@@ -167,33 +114,26 @@ func main() {
 		}
 		buf.WriteString("},\n")
 	}
-	buf.WriteString("\t}\n")
-	buf.WriteString("\tzoneToTerritory = map[string]string{\n")
-	var ztKeys []string
-	for k := range zoneToTerritory {
-		ztKeys = append(ztKeys, k)
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// zoneToTerritory maps a CLDR (legacy) zone id to its territory code (from\n")
+	buf.WriteString("// the BCP-47 time-zone alias table).\n")
+	buf.WriteString("var zoneToTerritory = map[string]string{\n")
+	for _, k := range cldr.SortedKeys(zoneToTerritory) {
+		buf.WriteString(fmt.Sprintf("\t%q: %q,\n", k, zoneToTerritory[k]))
 	}
-	sort.Strings(ztKeys)
-	for _, k := range ztKeys {
-		buf.WriteString(fmt.Sprintf("\t\t%q: %q,\n", k, zoneToTerritory[k]))
-	}
-	buf.WriteString("\t}\n")
-	buf.WriteString("\tzoneUsesCountry = map[string]bool{\n")
-	var zcKeys []string
-	for k, v := range zoneToTerritory {
-		if repTerritories[v] {
-			zcKeys = append(zcKeys, k)
+	buf.WriteString("}\n\n")
+
+	buf.WriteString("// zoneUsesCountry is the set of zones whose generic-location name uses the\n")
+	buf.WriteString("// COUNTRY (territory) display name rather than the exemplar city.\n")
+	buf.WriteString("var zoneUsesCountry = map[string]bool{\n")
+	for _, k := range cldr.SortedKeys(zoneToTerritory) {
+		if repTerritories[zoneToTerritory[k]] {
+			buf.WriteString(fmt.Sprintf("\t%q: true,\n", k))
 		}
 	}
-	sort.Strings(zcKeys)
-	for _, k := range zcKeys {
-		buf.WriteString(fmt.Sprintf("\t\t%q: true,\n", k))
-	}
-	buf.WriteString("\t}\n}\n")
+	buf.WriteString("}\n")
 
-	// Write the small shared core table to -out. Per-locale data lives in
-	// self-registering packages under locales/ (see below); this file contains
-	// only the shared core tables (zone maps, metazone coverage, etc.).
 	if err := cldr.WriteFormatted(*outPath, buf.Bytes()); err != nil {
 		log.Fatal(err)
 	}
@@ -201,101 +141,54 @@ func main() {
 	// The per-locale packages live under locales/, resolved relative to the
 	// directory holding -out (i.e. the datetime package dir, which is also the
 	// //go:generate working directory).
-	localesDir := filepath.Join(filepath.Dir(*outPath), "locales")
+	cldr.EmitLocalePackages(filepath.Join(filepath.Dir(*outPath), "locales"), "datetime",
+		"Unicode CLDR cldr-dates-full / cldr-numbers-full / cldr-core.", tags,
+		func(buf *bytes.Buffer, tag string) { writeLocaleData(buf, dataByLocale[tag]) })
 
-	// One self-registering package per locale: locales/<tag>/data_gen.go.
-	for _, e := range entries {
-		var lb bytes.Buffer
-		lb.WriteString("// Code generated by internal/gen; DO NOT EDIT.\n")
-		lb.WriteString("// Source: Unicode CLDR cldr-dates-full / cldr-numbers-full / cldr-core.\n\n")
-		lb.WriteString(fmt.Sprintf("// Package locale registers the datetime locale data for %q.\n", e.locale))
-		lb.WriteString("// Blank-import it to make that locale available to gocldr/datetime.\n")
-		lb.WriteString("package locale\n\n")
-		lb.WriteString("import \"github.com/hakastein/gocldr/datetime/internal/data\"\n\n")
-		lb.WriteString("func init() {\n")
-		lb.WriteString(fmt.Sprintf("\tdata.Register(%q, &data.LocaleData", e.locale))
-		writeLocaleData(&lb, e.data)
-		lb.WriteString(")\n}\n")
-
-		dir := filepath.Join(localesDir, e.locale)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			log.Fatal(err)
-		}
-		if err := cldr.WriteFormatted(filepath.Join(dir, "data_gen.go"), lb.Bytes()); err != nil {
-			log.Fatal(err)
-		}
-	}
-
-	// locales/all blank-imports every per-locale package so a program can pull
-	// in the full set with a single import.
-	var ab bytes.Buffer
-	ab.WriteString("// Code generated by internal/gen; DO NOT EDIT.\n")
-	ab.WriteString("// Source: Unicode CLDR cldr-dates-full / cldr-numbers-full / cldr-core.\n\n")
-	ab.WriteString("// Package all blank-imports every datetime per-locale data package, so a\n")
-	ab.WriteString("// program that imports it registers the data for every supported locale.\n")
-	ab.WriteString("package all\n\n")
-	ab.WriteString("import (\n")
-	tags := make([]string, 0, len(entries))
-	for _, e := range entries {
-		tags = append(tags, e.locale)
-	}
-	sort.Strings(tags)
-	for _, t := range tags {
-		ab.WriteString(fmt.Sprintf("\t_ \"github.com/hakastein/gocldr/datetime/locales/%s\"\n", t))
-	}
-	ab.WriteString(")\n")
-	allDir := filepath.Join(localesDir, "all")
-	if err := os.MkdirAll(allDir, 0o755); err != nil {
-		log.Fatal(err)
-	}
-	if err := cldr.WriteFormatted(filepath.Join(allDir, "all_gen.go"), ab.Bytes()); err != nil {
-		log.Fatal(err)
-	}
-
-	log.Printf("wrote %s + %d locales/<tag>/data_gen.go + locales/all: locales=%d numberingSystems=%d parentLocales=%d",
-		*outPath, len(entries), len(entries), len(numSys), len(parents))
+	log.Printf("wrote %s + %d locales/<tag>/data_gen.go + locales/all: numberingSystems=%d parentLocales=%d",
+		*outPath, len(tags), len(numSys), len(parents))
 }
 
-// ---- data model emitted into tables_gen.go ----
+// ---- data model emitted into the per-locale packages ----
 
-// localeData mirrors the Go-side localeData struct (defined in datetime.go).
-// Field names/types MUST match.
+// localeData mirrors data.LocaleData (datetime/internal/data). Field
+// names/types MUST match.
 type localeData struct {
 	// names: [width] -> values. width keys: wide, abbreviated, narrow, short
-	MonthsFormat map[string][]string `json:"mf"` // index 0..11
-	MonthsStand  map[string][]string `json:"ms"`
-	DaysFormat   map[string][]string `json:"df"` // index 0..6, Sunday=0
-	DaysStand    map[string][]string `json:"ds"`
-	QuartersFmt  map[string][]string `json:"qf"` // index 0..3
-	QuartersStd  map[string][]string `json:"qs"`
+	MonthsFormat map[string][]string // index 0..11
+	MonthsStand  map[string][]string
+	DaysFormat   map[string][]string // index 0..6, Sunday=0
+	DaysStand    map[string][]string
+	QuartersFmt  map[string][]string // index 0..3
+	QuartersStd  map[string][]string
 	// dayPeriods[width][key] -> value; keys: am, pm, midnight, noon, am-alt, pm-alt, morning1...
-	DayPeriodsFmt map[string]map[string]string `json:"pf"`
+	DayPeriodsFmt map[string]map[string]string
 	// eras[width][n] where width: names, abbr, narrow; index 0=BC,1=AD (and alt-variants 2,3)
-	Eras map[string][]string `json:"er"`
+	Eras map[string][]string
 
-	DateFormats map[string]string `json:"date"` // full,long,medium,short
-	TimeFormats map[string]string `json:"time"`
-	DateTime    map[string]string `json:"dt"`    // full,long,medium,short (regular combining)
-	AtTime      map[string]string `json:"at"`    // full,long,medium,short (atTime combining)
-	Available   map[string]string `json:"avail"` // skeleton -> pattern
+	DateFormats map[string]string // full,long,medium,short
+	TimeFormats map[string]string
+	DateTime    map[string]string // full,long,medium,short (regular combining)
+	AtTime      map[string]string // full,long,medium,short (atTime combining)
+	Available   map[string]string // skeleton -> pattern
 
-	NumberingSystem string            `json:"ns"`
-	DecimalSep      string            `json:"dsep"` // decimal separator of NumberingSystem (fractional seconds)
-	Zones           map[string]string `json:"tz"`   // "utc.short","utc.long","gmt","gmtZero","hourPos","hourNeg","regionFormat",...
+	NumberingSystem string
+	DecimalSep      string            // decimal separator of NumberingSystem (fractional seconds)
+	Zones           map[string]string // "utc.short","utc.long","gmt","gmtZero","hourPos","hourNeg","regionFormat",...
 
 	// DayPeriodRules: flexible day-period key -> [fromMinute, beforeMinute].
 	// Exact-point rules (noon/midnight) are stored with from==before.
-	DayPeriodRules map[string][2]int `json:"dpr"`
+	DayPeriodRules map[string][2]int
 	// MetazoneNames: metazone id -> "<width>.<type>" -> name.
-	MetazoneNames map[string]map[string]string `json:"mzn"`
+	MetazoneNames map[string]map[string]string
 	// ZoneOverrides: CLDR zone id -> "<width>.<type>" -> name.
-	ZoneOverrides map[string]map[string]string `json:"zov"`
+	ZoneOverrides map[string]map[string]string
 	// ExemplarCities: CLDR zone id -> localized exemplar city.
-	ExemplarCities map[string]string `json:"exc"`
+	ExemplarCities map[string]string
 	// TerritoryNames: territory code -> localized display name, limited to the
 	// country-representative territories (single-zone or primaryZone), used by
 	// the generic-location format ("United Kingdom Time").
-	TerritoryNames map[string]string `json:"ter"`
+	TerritoryNames map[string]string
 }
 
 func writeLocaleData(buf *bytes.Buffer, d localeData) {
@@ -329,12 +222,7 @@ func writeRangeMap(buf *bytes.Buffer, field string, m map[string][2]int) {
 		return
 	}
 	buf.WriteString(field + ": map[string][2]int{")
-	keys := make([]string, 0, len(m))
-	for k := range m {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
+	for _, k := range cldr.SortedKeys(m) {
 		buf.WriteString(fmt.Sprintf("%q: {%d, %d}, ", k, m[k][0], m[k][1]))
 	}
 	buf.WriteString("}, ")
@@ -533,25 +421,28 @@ func cleanAvailable(m map[string]flexStr) map[string]string {
 func ordered(byWidth map[string]map[string]string, order []string) map[string][]string {
 	out := map[string][]string{}
 	for _, w := range widths {
-		mm, ok := byWidth[w]
-		if !ok {
-			continue
-		}
-		arr := make([]string, len(order))
-		ok2 := true
-		for i, k := range order {
-			v, present := mm[k]
-			if !present {
-				ok2 = false
-				break
-			}
-			arr[i] = v
-		}
-		if ok2 {
+		if arr, ok := orderedRow(byWidth[w], order); ok {
 			out[w] = arr
 		}
 	}
 	return out
+}
+
+// orderedRow flattens one width's key->value map into a slice following order,
+// reporting false when the map is absent or misses a key.
+func orderedRow(mm map[string]string, order []string) ([]string, bool) {
+	if mm == nil {
+		return nil, false
+	}
+	arr := make([]string, len(order))
+	for i, k := range order {
+		v, ok := mm[k]
+		if !ok {
+			return nil, false
+		}
+		arr[i] = v
+	}
+	return arr, true
 }
 
 func dayPeriods(byWidth map[string]map[string]string) map[string]map[string]string {
@@ -739,7 +630,7 @@ func loadDayPeriodRules(path string) map[string]map[string][2]int {
 			DayPeriodRuleSet map[string]map[string]rawDayPeriodRule `json:"dayPeriodRuleSet"`
 		} `json:"supplemental"`
 	}
-	cldr.LoadJSON(path, &raw)
+	cldr.MustJSON(path, &raw)
 	out := map[string]map[string][2]int{}
 	for loc, rules := range raw.Supplemental.DayPeriodRuleSet {
 		inner := map[string][2]int{}
@@ -759,18 +650,10 @@ func loadDayPeriodRules(path string) map[string]map[string][2]int {
 // resolveDayPeriodRules finds the rule set for a locale, walking the simple
 // truncation fallback (e.g. "en-GB" -> "en"). The runtime resolves locale data
 // via the same fallback chain, so storing the resolved rules per locale keeps
-// the blob self-contained (and lets dedup collapse identical ones).
+// the blob self-contained.
 func resolveDayPeriodRules(all map[string]map[string][2]int, loc string) map[string][2]int {
-	cur := loc
-	for cur != "" {
-		if r, ok := all[cur]; ok {
-			return r
-		}
-		i := strings.LastIndexByte(cur, '-')
-		if i < 0 {
-			break
-		}
-		cur = cur[:i]
+	if tag, ok := locale.Resolve(loc, nil, func(cur string) bool { _, ok := all[cur]; return ok }); ok {
+		return all[tag]
 	}
 	return all["und"]
 }
@@ -780,10 +663,13 @@ func resolveDayPeriodRules(all map[string]map[string][2]int, loc string) map[str
 func hhmmToMinutes(s string) int {
 	parts := strings.SplitN(s, ":", 2)
 	if len(parts) != 2 {
-		return 0
+		log.Fatalf("day-period time %q: want HH:mm", s)
 	}
-	h, _ := strconv.Atoi(parts[0])
-	m, _ := strconv.Atoi(parts[1])
+	h, errH := strconv.Atoi(parts[0])
+	m, errM := strconv.Atoi(parts[1])
+	if errH != nil || errM != nil {
+		log.Fatalf("day-period time %q: want HH:mm", s)
+	}
 	return h*60 + m
 }
 
@@ -809,7 +695,7 @@ func loadMetazoneInfo(path string) map[string][]genMetazonePeriod {
 			} `json:"metaZones"`
 		} `json:"supplemental"`
 	}
-	cldr.LoadJSON(path, &raw)
+	cldr.MustJSON(path, &raw)
 	out := map[string][]genMetazonePeriod{}
 	var root map[string]json.RawMessage
 	if err := json.Unmarshal(raw.Supplemental.MetaZones.MetazoneInfo.Timezone, &root); err != nil {
@@ -880,7 +766,7 @@ func loadPrimaryZones(path string) map[string]string {
 			PrimaryZones map[string]string `json:"primaryZones"`
 		} `json:"supplemental"`
 	}
-	cldr.LoadJSON(path, &raw)
+	cldr.MustJSON(path, &raw)
 	out := map[string]string{}
 	for terr, zone := range raw.Supplemental.PrimaryZones {
 		if zone != "" {
@@ -905,7 +791,7 @@ func loadZoneTerritories(path string, primary map[string]string) (map[string]str
 			} `json:"u"`
 		} `json:"keyword"`
 	}
-	cldr.LoadJSON(path, &raw)
+	cldr.MustJSON(path, &raw)
 
 	zoneToTerritory := map[string]string{}
 	zonesPerTerritory := map[string]int{}
@@ -925,12 +811,9 @@ func loadZoneTerritories(path string, primary map[string]string) (map[string]str
 		aliases := strings.Fields(obj.Alias)
 		hasIANA := false
 		for _, a := range aliases {
-			// IANA zone ids contain a '/'. Skip Etc/* and Unknown placeholders;
+			// IANA zone ids contain a '/'. Skip Etc/* placeholders;
 			// abbreviations (EST5EDT, PRC, GB) without '/' are not IANA ids.
-			if !strings.Contains(a, "/") {
-				continue
-			}
-			if strings.HasPrefix(a, "Etc/") || a == "Factory" {
+			if !strings.Contains(a, "/") || strings.HasPrefix(a, "Etc/") {
 				continue
 			}
 			zoneToTerritory[a] = terr
@@ -986,31 +869,18 @@ func loadTerritoryNames(dir string, parents map[string]string, rep map[string]bo
 	}
 
 	resolve := func(loc, terr string) string {
-		cur := loc
-		seen := map[string]bool{}
-		for cur != "" && !seen[cur] {
-			seen[cur] = true
-			if m, ok := rawByLocale[cur]; ok {
-				if v, ok := m[terr]; ok && v != "" {
-					return v
-				}
-			}
-			if p, ok := parents[cur]; ok {
-				cur = p
-				continue
-			}
-			if i := strings.LastIndexByte(cur, '-'); i >= 0 {
-				cur = cur[:i]
-				continue
-			}
-			break
+		var name string
+		locale.Resolve(loc, parents, func(cur string) bool {
+			name = rawByLocale[cur][terr]
+			return name != ""
+		})
+		if name != "" {
+			return name
 		}
 		// Ultimate fallback to root, then en.
 		for _, fb := range []string{"root", "en"} {
-			if m, ok := rawByLocale[fb]; ok {
-				if v, ok := m[terr]; ok && v != "" {
-					return v
-				}
+			if v := rawByLocale[fb][terr]; v != "" {
+				return v
 			}
 		}
 		return ""
@@ -1031,17 +901,17 @@ func loadTerritoryNames(dir string, parents map[string]string, rep map[string]bo
 	return out
 }
 
-// loadNumberFormatInfo returns, per locale, the resolved default numbering
-// system and the decimal separator of that numbering system, both read from
-// cldr-numbers. ICU formats the fractional-second field with this decimal
-// separator (e.g. fr "09:07:05,123", fa with its arabext separator).
-func loadNumberFormatInfo(dir string) (ns, decimal map[string]string) {
+// loadNumberFormatInfo returns a lookup for a locale's resolved default
+// numbering system and that system's decimal separator, both read from
+// cldr-numbers (latn / "." for locales without number data). ICU formats the
+// fractional-second field with this decimal separator (e.g. fr "09:07:05,123",
+// fa with its arabext separator).
+func loadNumberFormatInfo(dir string) func(loc string) (ns, decimalSep string) {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
 		log.Fatal(err)
 	}
-	ns = map[string]string{}
-	decimal = map[string]string{}
+	info := map[string][2]string{}
 	for _, e := range ents {
 		if !e.IsDir() {
 			continue
@@ -1059,31 +929,18 @@ func loadNumberFormatInfo(dir string) (ns, decimal map[string]string) {
 		if !ok {
 			continue
 		}
-		var def string
-		_ = json.Unmarshal(m.Numbers["defaultNumberingSystem"], &def)
-		if ov, ok := cldr.ICUNumberingOverride[loc]; ok {
-			def = ov
+		ns, sym := cldr.ResolveNumberDefaults(loc, m.Numbers)
+		sep := sym["decimal"]
+		if sep == "" {
+			sep = "."
 		}
-		ns[loc] = def
-		decimal[loc] = numberDecimalSep(m.Numbers, def)
+		info[loc] = [2]string{ns, sep}
 	}
-	return ns, decimal
-}
-
-// numberDecimalSep returns the decimal separator for numbering system nsName,
-// falling back to latn and then ".".
-func numberDecimalSep(numbers map[string]json.RawMessage, nsName string) string {
-	for _, key := range []string{"symbols-numberSystem-" + nsName, "symbols-numberSystem-latn"} {
-		raw, ok := numbers[key]
+	return func(loc string) (string, string) {
+		v, ok := info[loc]
 		if !ok {
-			continue
+			return "latn", "."
 		}
-		var sym struct {
-			Decimal string `json:"decimal"`
-		}
-		if err := json.Unmarshal(raw, &sym); err == nil && sym.Decimal != "" {
-			return sym.Decimal
-		}
+		return v[0], v[1]
 	}
-	return "."
 }
