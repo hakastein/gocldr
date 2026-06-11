@@ -21,14 +21,28 @@ type intlRow struct {
 	Category string `json:"category"`
 }
 
-func loadIntlRows(t *testing.T) []intlRow {
+// loadRows decodes a JSON fixture into a non-empty slice of rows.
+func loadRows[T any](t *testing.T, path string) []T {
 	t.Helper()
-	data, err := os.ReadFile("testdata/intl_plurals.json")
-	require.NoError(t, err, "read intl data")
-	var rows []intlRow
-	require.NoError(t, json.Unmarshal(data, &rows), "unmarshal intl data")
-	require.NotEmpty(t, rows, "no intl rows loaded")
+	data, err := os.ReadFile(path)
+	require.NoError(t, err, "read fixture")
+	var rows []T
+	require.NoError(t, json.Unmarshal(data, &rows), "unmarshal fixture")
+	require.NotEmpty(t, rows, "no rows loaded")
 	return rows
+}
+
+// selectCategory dispatches on a fixture row's rule type.
+func selectCategory(t *testing.T, typ, locale string, ops plural.Operands) plural.Category {
+	t.Helper()
+	switch typ {
+	case "cardinal":
+		return plural.Cardinal(locale, ops)
+	case "ordinal":
+		return plural.Ordinal(locale, ops)
+	}
+	require.Failf(t, "unknown type", "type %q", typ)
+	return ""
 }
 
 // TestIntlParity asserts the generated tables agree with JavaScript's
@@ -39,7 +53,7 @@ func loadIntlRows(t *testing.T) []intlRow {
 // The matrix is committed under testdata/intl_plurals.json, produced by
 // internal/gen/intl.js (see that file to regenerate).
 func TestIntlParity(t *testing.T) {
-	rows := loadIntlRows(t)
+	rows := loadRows[intlRow](t, "testdata/intl_plurals.json")
 
 	for _, r := range rows {
 		// Use the string form (authoritative for v/w/f/t), matching the
@@ -47,13 +61,7 @@ func TestIntlParity(t *testing.T) {
 		ops, err := plural.OperandsFromString(r.Value)
 		require.NoErrorf(t, err, "OperandsFromString(%q)", r.Value)
 
-		var got plural.Category
-		switch r.Type {
-		case "cardinal":
-			got = plural.Cardinal(r.Locale, ops)
-		case "ordinal":
-			got = plural.Ordinal(r.Locale, ops)
-		}
+		got := selectCategory(t, r.Type, r.Locale, ops)
 		assert.Equalf(t, r.Category, string(got),
 			"%s %s value=%q (ops=%+v)", r.Type, r.Locale, r.Value, ops)
 	}
@@ -63,25 +71,19 @@ func TestIntlParity(t *testing.T) {
 // well, ensuring the fraction-digit formatting logic produces the same
 // operands as the string path for the same min/max fraction digits.
 func TestNewOperandsParity(t *testing.T) {
-	rows := loadIntlRows(t)
+	rows := loadRows[intlRow](t, "testdata/intl_plurals.json")
 
 	for _, r := range rows {
-		var got plural.Category
-		switch r.Type {
-		case "cardinal":
-			got = plural.CardinalFor(r.Locale, parseF(r.Value), r.MinFrac, r.MaxFrac)
-		case "ordinal":
-			got = plural.OrdinalFor(r.Locale, parseF(r.Value), r.MinFrac, r.MaxFrac)
-		}
+		ops := plural.NewOperands(parseF(t, r.Value), r.MinFrac, r.MaxFrac)
+		got := selectCategory(t, r.Type, r.Locale, ops)
 		assert.Equalf(t, r.Category, string(got),
 			"%s %s value=%q minF=%d maxF=%d", r.Type, r.Locale, r.Value, r.MinFrac, r.MaxFrac)
 	}
 }
 
-func parseF(s string) float64 {
+func parseF(t *testing.T, s string) float64 {
+	t.Helper()
 	ops, err := plural.OperandsFromString(s)
-	if err != nil {
-		return 0
-	}
+	require.NoError(t, err)
 	return ops.N
 }

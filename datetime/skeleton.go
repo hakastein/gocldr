@@ -53,12 +53,9 @@ func (c *formatCtx) buildSkeleton() string {
 	// it for 24-hour locales (which keep their plain hour pattern). With no hour
 	// requested the period is always rendered, so we emit B in that case too and
 	// let the matcher / a synthesized bare-B pattern handle it.
-	if o.DayPeriod != "" {
-		if o.Hour == "" || c.hourLetter() == "h" {
-			b.WriteString(dayPeriodSkel(o.DayPeriod))
-		}
+	if o.DayPeriod != "" && (o.Hour == "" || c.hourLetter() == "h") {
+		b.WriteString(dayPeriodSkel(o.DayPeriod))
 	}
-	// hour: pick h vs H based on hour cycle.
 	if o.Hour != "" {
 		hl := c.hourLetter()
 		if o.Hour == "2-digit" {
@@ -73,14 +70,18 @@ func (c *formatCtx) buildSkeleton() string {
 	case "numeric":
 		b.WriteString("m")
 	}
+	// No availableFormats entry carries the fractional-second S field, so it
+	// must stay out of the matching skeleton (resolvePattern injects it after
+	// matching); a fraction without seconds still needs an s field to anchor on.
 	switch o.Second {
 	case "2-digit":
 		b.WriteString("ss")
 	case "numeric":
 		b.WriteString("s")
-	}
-	if o.FractionalSecondDigits != nil {
-		b.WriteString(strings.Repeat("S", *o.FractionalSecondDigits))
+	default:
+		if o.FractionalSecondDigits != nil && (o.Hour != "" || o.Minute != "") {
+			b.WriteString("s")
+		}
 	}
 	switch o.TimeZoneName {
 	case "long":
@@ -99,8 +100,8 @@ func (c *formatCtx) buildSkeleton() string {
 	return b.String()
 }
 
-// dayPeriodSkel maps the dayPeriod option width to a B-run length: short ->
-// "B" (abbreviated), long -> "BBBB" (wide), narrow -> "BBBBB".
+// dayPeriodSkel maps the dayPeriod option width to a B-run length, mirroring
+// dayPeriodOptionWidth's widths.
 func dayPeriodSkel(v string) string {
 	switch v {
 	case "long":
@@ -140,13 +141,9 @@ func (c *formatCtx) hourLetter() string {
 // localeUses12 inspects the locale's short time pattern to decide whether the
 // locale defaults to a 12-hour clock.
 func (c *formatCtx) localeUses12() bool {
-	p := c.ld.TimeFormats["short"]
-	for _, ch := range p {
-		switch ch {
-		case 'h', 'K':
-			return true
-		case 'H', 'k':
-			return false
+	for _, ch := range c.ld.TimeFormats["short"] {
+		if isHourLetter(ch) {
+			return hourIs12(ch)
 		}
 	}
 	return false
@@ -164,85 +161,55 @@ func (c *formatCtx) applyHourCycle(pattern string) string {
 		want12 = *c.opts.Hour12
 	}
 
+	toks := tokenizePattern(pattern)
 	// Determine current cycle of the pattern.
 	cur12 := false
 	hasHour := false
 	nonCanonical := false // pattern uses K (h11) or k (h24)
-	for _, ch := range stripQuotes(pattern) {
-		switch ch {
-		case 'h':
-			cur12 = true
+	for _, tok := range toks {
+		if isHourLetter(tok.letter) {
 			hasHour = true
-		case 'K':
-			cur12 = true
-			hasHour = true
-			nonCanonical = true
-		case 'H':
-			hasHour = true
-		case 'k':
-			hasHour = true
-			nonCanonical = true
+			cur12 = cur12 || hourIs12(tok.letter)
+			nonCanonical = nonCanonical || tok.letter == 'K' || tok.letter == 'k'
 		}
 	}
 	// We always normalize to the canonical h12 ('h') / h23 ('H') cycle that
 	// Intl uses for hour12 true/false, so a pattern using K/k must be rewritten
-	// even when its 12/24-ness already matches the request.
-	if !hasHour || (cur12 == want12 && !nonCanonical) {
+	// even when its 12/24-ness already matches the request. A pattern already
+	// on the requested cycle may still need padding: ICU keeps a two-digit hour
+	// when the caller forces the locale's non-preferred clock, even though the
+	// source pattern used a single (unpadded) hour letter.
+	rewrite := cur12 != want12 || nonCanonical
+	forcePad := c.forcePad24()
+	if !hasHour || (!rewrite && !forcePad) {
 		return pattern
 	}
 
 	// Rewrite hour letters and adjust the day-period token.
+	nl := "H"
+	if want12 {
+		nl = "h"
+	}
 	var b strings.Builder
-	runes := []rune(pattern)
-	n := len(runes)
-	inQuote := false
-	for i := 0; i < n; {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			b.WriteRune(ch)
-			i++
+	for _, tok := range toks {
+		if !isHourLetter(tok.letter) {
+			b.WriteString(tok.text)
 			continue
 		}
-		if inQuote {
-			b.WriteRune(ch)
-			i++
-			continue
+		cnt := tok.count
+		if forcePad && cnt < 2 {
+			cnt = 2
 		}
-		if ch == 'h' || ch == 'H' || ch == 'K' || ch == 'k' {
-			j := i
-			for j < n && runes[j] == ch {
-				j++
-			}
-			cnt := j - i
-			var nl rune
-			if want12 {
-				nl = 'h'
-			} else {
-				nl = 'H'
-			}
-			// Pad to two digits when forcing the locale's non-preferred clock; ICU
-			// keeps the hour padded in that case even though the source pattern
-			// used a single (unpadded) hour letter.
-			if c.forcePad24() && cnt < 2 {
-				cnt = 2
-			}
-			for k := 0; k < cnt; k++ {
-				b.WriteRune(nl)
-			}
-			i = j
-			continue
-		}
-		b.WriteRune(ch)
-		i++
+		b.WriteString(strings.Repeat(nl, cnt))
 	}
 	out := b.String()
-	if want12 {
-		out = c.ensureDayPeriod(out)
-	} else {
-		out = removeDayPeriod(out)
+	if !rewrite {
+		return out
 	}
-	return out
+	if want12 {
+		return c.ensureDayPeriod(out)
+	}
+	return removeDayPeriod(out)
 }
 
 // ensureDayPeriod adds an "a" field next to the hour if the 12-hour pattern is
@@ -252,33 +219,37 @@ func (c *formatCtx) applyHourCycle(pattern string) string {
 // ja "aK:mm:ss") are rendered correctly instead of textually splicing " a"
 // after the hour.
 func (c *formatCtx) ensureDayPeriod(pattern string) string {
-	if strings.ContainsAny(stripQuotes(pattern), "aAbB") {
-		return pattern
-	}
-	runes := []rune(pattern)
+	toks := tokenizePattern(pattern)
 	// Locate the (single, converted) hour run.
-	start, end := -1, -1
-	inQuote := false
-	for i := 0; i < len(runes); i++ {
-		if runes[i] == '\'' {
-			inQuote = !inQuote
-			continue
-		}
-		if !inQuote && runes[i] == 'h' {
-			if start < 0 {
-				start = i
+	first, last := -1, -1
+	for i, tok := range toks {
+		switch tok.letter {
+		case 'a', 'A', 'b', 'B':
+			return pattern
+		case 'h':
+			if first < 0 {
+				first = i
 			}
-			end = i
+			last = i
 		}
 	}
-	if start < 0 {
+	if first < 0 {
 		return pattern
 	}
 	prefix, sep := c.periodAffix()
-	if prefix {
-		return string(runes[:start]) + "a" + sep + string(runes[start:])
+	var b strings.Builder
+	for i, tok := range toks {
+		if prefix && i == first {
+			b.WriteString("a")
+			b.WriteString(sep)
+		}
+		b.WriteString(tok.text)
+		if !prefix && i == last {
+			b.WriteString(sep)
+			b.WriteString("a")
+		}
 	}
-	return string(runes[:end+1]) + sep + "a" + string(runes[end+1:])
+	return b.String()
 }
 
 // periodAffix inspects the locale's native 12-hour available format to learn
@@ -301,43 +272,33 @@ func (c *formatCtx) periodAffix() (prefix bool, sep string) {
 // scanPeriodAffix parses a native 12-hour pattern and returns the day period's
 // placement relative to the hour field plus the literal text between them.
 func scanPeriodAffix(pat string) (prefix bool, sep string, ok bool) {
-	runes := []rune(pat)
-	n := len(runes)
-	hStart, hEnd := -1, -1
-	pStart, pEnd := -1, -1
-	inQuote := false
-	for i := 0; i < n; i++ {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			continue
-		}
-		if inQuote {
-			continue
-		}
-		switch ch {
-		case 'h', 'H', 'K', 'k':
-			if hStart < 0 {
-				hStart = i
+	toks := tokenizePattern(pat)
+	hFirst, hLast := -1, -1
+	pFirst, pLast := -1, -1
+	for i, tok := range toks {
+		switch {
+		case isHourLetter(tok.letter):
+			if hFirst < 0 {
+				hFirst = i
 			}
-			hEnd = i
-		case 'a', 'b', 'B':
-			if pStart < 0 {
-				pStart = i
+			hLast = i
+		case tok.letter == 'a' || tok.letter == 'b' || tok.letter == 'B':
+			if pFirst < 0 {
+				pFirst = i
 			}
-			pEnd = i
+			pLast = i
 		}
 	}
-	if hStart < 0 || pStart < 0 {
+	if hFirst < 0 || pFirst < 0 {
 		return false, "", false
 	}
-	if pEnd < hStart {
+	if pLast < hFirst {
 		// period before hour: separator is everything between them.
-		return true, string(runes[pEnd+1 : hStart]), true
+		return true, joinTokens(toks[pLast+1 : hFirst]), true
 	}
-	if pStart > hEnd {
+	if pFirst > hLast {
 		// period after hour.
-		return false, string(runes[hEnd+1 : pStart]), true
+		return false, joinTokens(toks[hLast+1 : pFirst]), true
 	}
 	return false, "", false
 }
@@ -346,53 +307,26 @@ func scanPeriodAffix(pat string) (prefix bool, sep string, ok bool) {
 // from a pattern when converting to a 24-hour clock.
 func removeDayPeriod(pattern string) string {
 	var b strings.Builder
-	runes := []rune(pattern)
-	n := len(runes)
-	inQuote := false
-	for i := 0; i < n; {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			b.WriteRune(ch)
-			i++
-			continue
-		}
-		if !inQuote && (ch == 'a' || ch == 'b' || ch == 'B') {
-			j := i
-			for j < n && runes[j] == ch {
-				j++
-			}
+	skipSpace := false
+	for _, tok := range tokenizePattern(pattern) {
+		if tok.letter == 'a' || tok.letter == 'b' || tok.letter == 'B' {
 			// also consume one adjacent space (before or after)
-			out := b.String()
-			if len(out) > 0 && (out[len(out)-1] == ' ') {
-				trimmed := []rune(out)
+			if out := b.String(); strings.HasSuffix(out, " ") {
 				b.Reset()
-				b.WriteString(string(trimmed[:len(trimmed)-1]))
-			} else if j < n && runes[j] == ' ' {
-				j++
+				b.WriteString(strings.TrimSuffix(out, " "))
+			} else {
+				skipSpace = true
 			}
-			i = j
 			continue
 		}
-		b.WriteRune(ch)
-		i++
+		text := tok.text
+		if skipSpace {
+			text = strings.TrimPrefix(text, " ")
+			skipSpace = false
+		}
+		b.WriteString(text)
 	}
 	return strings.TrimSpace(b.String())
-}
-
-func stripQuotes(pattern string) string {
-	var b strings.Builder
-	inQuote := false
-	for _, ch := range pattern {
-		if ch == '\'' {
-			inQuote = !inQuote
-			continue
-		}
-		if !inQuote {
-			b.WriteRune(ch)
-		}
-	}
-	return b.String()
 }
 
 // ---- best-fit skeleton matching ----
@@ -403,26 +337,14 @@ type skelField struct {
 	count  int
 }
 
-// parseSkeleton breaks a skeleton into canonical fields keyed by field class.
+// parseSkeleton breaks a skeleton into canonical fields keyed by field class,
+// keeping the larger count if a class is duplicated.
 func parseSkeleton(skel string) map[rune]skelField {
 	out := map[rune]skelField{}
-	runes := []rune(skel)
-	for i := 0; i < len(runes); {
-		ch := runes[i]
-		j := i
-		for j < len(runes) && runes[j] == ch {
-			j++
+	for _, tok := range tokenizePattern(skel) {
+		if cls := fieldClass(tok.letter); cls != 0 && tok.count > out[cls].count {
+			out[cls] = skelField{letter: tok.letter, count: tok.count}
 		}
-		cls := fieldClass(ch)
-		if cls != 0 {
-			// Keep the larger count if duplicated.
-			f := out[cls]
-			cnt := j - i
-			if cnt > f.count {
-				out[cls] = skelField{letter: ch, count: cnt}
-			}
-		}
-		i = j
 	}
 	return out
 }
@@ -467,35 +389,18 @@ func fieldClass(ch rune) rune {
 // the skeletons under which it files the standard date/time patterns.
 func patternSkeleton(pattern string) string {
 	fields := map[rune]skelField{}
-	runes := []rune(pattern)
-	n := len(runes)
-	inQuote := false
-	for i := 0; i < n; {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			i++
-			continue
-		}
-		if inQuote || !isPatternLetter(ch) {
-			i++
-			continue
-		}
-		j := i
-		for j < n && runes[j] == ch {
-			j++
-		}
+	for _, tok := range tokenizePattern(pattern) {
 		// AM/PM (a, and the b variant) is an implicit companion of the 12-hour
 		// 'h' field: ICU drops it when computing pattern skeletons, so a
 		// request for "hms" can match "a h시 m분 s초 zzzz" without the day
 		// period counting as an extra field. The flexible day period B stays
 		// significant.
-		if cls := fieldClass(ch); cls != 0 && ch != 'a' && ch != 'b' {
-			if cnt := j - i; cnt > fields[cls].count {
-				fields[cls] = skelField{letter: ch, count: cnt}
-			}
+		if tok.letter == 'a' || tok.letter == 'b' {
+			continue
 		}
-		i = j
+		if cls := fieldClass(tok.letter); cls != 0 && tok.count > fields[cls].count {
+			fields[cls] = skelField{letter: tok.letter, count: tok.count}
+		}
 	}
 	var b strings.Builder
 	for _, cls := range append(dateClasses, timeClasses...) {
@@ -573,28 +478,8 @@ func (c *formatCtx) bestMatch(skel string) string {
 	}
 
 	// 2. score every available skeleton; lower is better.
-	type cand struct {
-		key   string
-		pat   string
-		score int
-	}
-	var best *cand
-	keys := make([]string, 0, len(avail))
-	for k := range avail {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		have := parseSkeleton(k)
-		score := matchScore(want, have)
-		if best == nil || score < best.score {
-			cp := cand{key: k, pat: avail[k], score: score}
-			best = &cp
-		}
-	}
-
-	if best != nil {
-		return c.adjustWidths(best.pat, want)
+	if p := c.matchPortion(skel, want); p != "" {
+		return p
 	}
 
 	// 3. Fallback: synthesize from date + time available formats and combine.
@@ -648,6 +533,10 @@ func matchScore(want, have map[rune]skelField) int {
 
 func hourIs12(letter rune) bool {
 	return letter == 'h' || letter == 'K'
+}
+
+func isHourLetter(ch rune) bool {
+	return ch == 'h' || ch == 'H' || ch == 'K' || ch == 'k'
 }
 
 // zoneKind groups the zone pattern letters by the format they produce:
@@ -711,98 +600,72 @@ func widthDistance(cls rune, want, have skelField) int {
 // a long month). Non-matching fields are left untouched.
 func (c *formatCtx) adjustWidths(pattern string, want map[rune]skelField) string {
 	var b strings.Builder
-	runes := []rune(pattern)
-	n := len(runes)
-	inQuote := false
-	for i := 0; i < n; {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			b.WriteRune(ch)
-			i++
+	for _, tok := range tokenizePattern(pattern) {
+		cls := fieldClass(tok.letter)
+		wf, ok := want[cls]
+		if tok.letter == 0 || !ok {
+			b.WriteString(tok.text)
 			continue
 		}
-		if inQuote || !isPatternLetter(ch) {
-			b.WriteRune(ch)
-			i++
-			continue
+		ch, cnt := tok.letter, tok.count
+		// Match the requested length, but keep the candidate's own letter
+		// variant (e.g. keep 'L' vs 'M', 'h' vs 'H').
+		outCh := ch
+		newCnt := wf.count
+		// Zone: the candidate may carry a different zone letter (e.g. the time
+		// pattern's generic "v") than the one requested. The zone letter
+		// encodes the format kind (z name, O localized GMT offset, ...), so
+		// honor the REQUESTED letter and width rather than the candidate's;
+		// otherwise shortOffset/longOffset both collapse to the candidate's
+		// rendering.
+		if cls == 'z' {
+			outCh = wf.letter
 		}
-		j := i
-		for j < n && runes[j] == ch {
-			j++
+		// Do not promote a numeric pattern field to an alpha (name) one or
+		// vice versa: ICU's adjustFieldTypes never crosses the
+		// numeric<->text boundary. E.g. ja's yMMMd pattern uses a numeric
+		// "M" followed by a literal 月; a long-month request must not widen
+		// it to MMMM. Whether a field is numeric depends on its letter, not
+		// only the count (e.g. single "E" is the abbreviated weekday name,
+		// while single "M" is a numeric month).
+		if (cls == 'M' || cls == 'Q') && fieldNumeric(ch, cnt) != fieldNumeric(wf.letter, wf.count) {
+			newCnt = cnt
 		}
-		cnt := j - i
-		cls := fieldClass(ch)
-		if wf, ok := want[cls]; ok {
-			// Match the requested length, but keep the candidate's own letter
-			// variant (e.g. keep 'L' vs 'M', 'h' vs 'H').
-			outCh := ch
-			newCnt := wf.count
-			// Zone: the candidate may carry a different zone letter (e.g. the time
-			// pattern's generic "v") than the one requested. The zone letter
-			// encodes the format kind (z name, O localized GMT offset, ...), so
-			// honor the REQUESTED letter and width rather than the candidate's;
-			// otherwise shortOffset/longOffset both collapse to the candidate's
-			// rendering. Name-based widths for non-UTC zones remain data-blocked.
-			if cls == 'z' {
-				outCh = wf.letter
-			}
-			// Do not promote a numeric pattern field to an alpha (name) one or
-			// vice versa: ICU's adjustFieldTypes never crosses the
-			// numeric<->text boundary. E.g. ja's yMMMd pattern uses a numeric
-			// "M" followed by a literal 月; a long-month request must not widen
-			// it to MMMM. Whether a field is numeric depends on its letter, not
-			// only the count (e.g. single "E" is the abbreviated weekday name,
-			// while single "M" is a numeric month).
-			if (cls == 'M' || cls == 'Q') && fieldNumeric(ch, cnt) != fieldNumeric(wf.letter, wf.count) {
+		// Numeric year: keep candidate count unless request is 2-digit.
+		if cls == 'y' {
+			if wf.count == 2 {
+				newCnt = 2
+			} else {
 				newCnt = cnt
 			}
-			// Numeric year: keep candidate count unless request is 2-digit.
-			if cls == 'y' {
-				if wf.count == 2 {
-					newCnt = 2
-				} else {
-					newCnt = cnt
-				}
-			}
-			// Hour: "2-digit" pads to HH, "numeric" uses a single (unpadded)
-			// hour, EXCEPT when the request forces the locale's non-preferred
-			// clock, in which case ICU keeps the padded width (e.g. en forced to
-			// a 24-hour clock renders "09:07").
-			if cls == 'h' {
-				switch {
-				case wf.count >= 2:
-					newCnt = 2
-				case c.forcePad24():
-					newCnt = 2
-				case c.zoneKeepsHourWidth() && (ch == 'H' || ch == 'k'):
-					// With a zone field and no seconds, ICU keeps the matched 24-hour
-					// pattern's own hour width rather than unpadding a numeric hour:
-					// de's "HH:mm v" stays "09:07 UTC" while ja's "H:mm v" stays
-					// "9:07 GMT...". Preserve the candidate's count.
-					newCnt = cnt
-				default:
-					newCnt = 1
-				}
-			}
-			// Minute / second: requested and pattern fields are both numeric,
-			// and UTS #35 keeps the pattern's own length in the
-			// numeric<->numeric case, so the candidate width always wins
-			// (en "HH:mm:ss" stays padded for a numeric request, ko
-			// "a h시 m분 s초" stays unpadded for a 2-digit one — both match
-			// Intl).
-			if cls == 'm' || cls == 's' {
+		}
+		// Hour: "2-digit" pads to HH, "numeric" uses a single (unpadded)
+		// hour. Padding for a forced non-preferred clock is applyHourCycle's
+		// job; it always runs after this on the resolved pattern.
+		if cls == 'h' {
+			switch {
+			case wf.count >= 2:
+				newCnt = 2
+			case c.zoneKeepsHourWidth() && (ch == 'H' || ch == 'k'):
+				// With a zone field and no seconds, ICU keeps the matched 24-hour
+				// pattern's own hour width rather than unpadding a numeric hour:
+				// de's "HH:mm v" stays "09:07 UTC" while ja's "H:mm v" stays
+				// "9:07 GMT...". Preserve the candidate's count.
 				newCnt = cnt
-			}
-			for k := 0; k < newCnt; k++ {
-				b.WriteRune(outCh)
-			}
-		} else {
-			for k := 0; k < cnt; k++ {
-				b.WriteRune(ch)
+			default:
+				newCnt = 1
 			}
 		}
-		i = j
+		// Minute / second: requested and pattern fields are both numeric,
+		// and UTS #35 keeps the pattern's own length in the
+		// numeric<->numeric case, so the candidate width always wins
+		// (en "HH:mm:ss" stays padded for a numeric request, ko
+		// "a h시 m분 s초" stays unpadded for a 2-digit one — both match
+		// Intl).
+		if cls == 'm' || cls == 's' {
+			newCnt = cnt
+		}
+		b.WriteString(strings.Repeat(string(outCh), newCnt))
 	}
 	return b.String()
 }
@@ -851,16 +714,10 @@ func (c *formatCtx) synthesize(want map[rune]skelField) string {
 	}
 	if timeSkel.Len() > 0 {
 		timePat = c.matchPortion(timeSkel.String(), want)
-		timePat = c.applyHourCycle(timePat)
 	}
 	switch {
 	case datePat != "" && timePat != "":
-		style := connectorStyle(want)
-		conn := c.ld.AtTime[style]
-		if conn == "" {
-			conn = c.ld.DateTime[style]
-		}
-		return combine(conn, datePat, timePat)
+		return c.combineDateTime(connectorStyle(want), datePat, timePat)
 	case datePat != "":
 		return datePat
 	case timePat != "":

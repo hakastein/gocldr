@@ -46,8 +46,7 @@ trailing-subtag truncation). Unknown locales degrade rather than error, with a
 per-package terminal step that mirrors how each formatter can least-badly
 degrade:
 
-- `number` falls back to the registered `root` data (plain ASCII grouped
-  decimals), or a built-in copy of it if nothing is registered;
+- `number` falls back to built-in root data (plain ASCII grouped decimals);
 - `datetime` falls back to `en` (its registered `und` root data is deliberately
   skipped), and to a plain RFC3339 string when no data is linked in at all;
 - `plural` walks by truncation only — `Intl.PluralRules` ignores `parentLocale`

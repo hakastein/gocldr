@@ -8,29 +8,13 @@ import (
 // metazonePeriod is one entry of the global zone->metazone mapping
 // (CLDR metaZones.json metazoneInfo). A zone may map to different metazones
 // over time; From/To bound the interval in which Mzone applies (Unix epoch
-// seconds, 0 meaning open-ended). The generator emits the package-level
-// zoneToMetazone map of these.
+// seconds, 0 meaning open-ended). The generated tables_gen.go emits the
+// package-level zoneToMetazone map of these.
 type metazonePeriod struct {
 	Mzone string
 	From  int64 // unix seconds, 0 = open start
 	To    int64 // unix seconds, 0 = open end
 }
-
-// zoneToMetazone maps a CLDR (legacy) zone id to its ordered metazone periods.
-// It is declared here but POPULATED by the generated tables_gen.go (via an
-// init that assigns the full map), so the package still builds against an older
-// table that predates the metazone data (the map is simply nil/empty then).
-var zoneToMetazone map[string][]metazonePeriod
-
-// zoneToTerritory maps a CLDR (legacy) zone id to its territory code (from the
-// BCP-47 time-zone alias table). zoneUsesCountry is the subset of zones whose
-// generic-location name uses the COUNTRY (territory) display name rather than
-// the exemplar city (single-zone territory or the territory's primaryZone).
-// Both are declared here and POPULATED by the generated tables_gen.go.
-var (
-	zoneToTerritory map[string]string
-	zoneUsesCountry map[string]bool
-)
 
 // metazoneFor returns the CLDR metazone id for a zone id at instant t, picking
 // the period whose [From,To) interval covers t (open-ended bounds match).
@@ -38,9 +22,6 @@ func metazoneFor(zoneID string, t time.Time) string {
 	periods := zoneToMetazone[zoneID]
 	if len(periods) == 0 {
 		return ""
-	}
-	if len(periods) == 1 {
-		return periods[0].Mzone
 	}
 	sec := t.Unix()
 	for _, p := range periods {
@@ -153,13 +134,7 @@ func (c *formatCtx) genericZoneName(t time.Time, long bool) string {
 
 // zoneNameOverride looks up a per-zone name override ("<width>.<type>").
 func (c *formatCtx) zoneNameOverride(width, typ string) string {
-	if c.zoneID == "" {
-		return ""
-	}
-	if ov := c.ld.ZoneOverrides[c.zoneID]; ov != nil {
-		return ov[width+"."+typ]
-	}
-	return ""
+	return c.ld.ZoneOverrides[c.zoneID][width+"."+typ]
 }
 
 // genericLocation builds the regionFormat generic-location name. Following

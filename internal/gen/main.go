@@ -5,13 +5,12 @@
 // datetime and number data packages for that tag, plus locales/all/all_gen.go
 // that pulls in both domains' "all" aggregators.
 //
-// It is invoked via the //go:generate directive in generate.go:
-//
-//	go generate ./...   # (the root directive) — or directly: go run ./internal/gen
+// gen/generate.sh runs it (`go run ./internal/gen`) after the per-domain
+// generators so the umbrellas track the locale sets just produced; there is
+// deliberately no //go:generate directive for it (see generate.go).
 //
 // This generator reads NO CLDR data; it only enumerates the existing per-locale
-// directories and writes import stubs, so it is not CLDR-version-sensitive and
-// is safe to run on the host.
+// directories and writes import stubs.
 package main
 
 import (
@@ -20,6 +19,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -29,16 +29,15 @@ import (
 func main() {
 	log.SetFlags(0)
 
-	// Resolve the module root relative to this generator. The //go:generate
-	// directive (and `go run ./internal/gen`) runs with the module root as the
-	// working directory, so paths are relative to it.
+	// Runs with the module root as the working directory, so paths are
+	// relative to it.
 	datetimeLocales := filepath.Join("datetime", "locales")
 	numberLocales := filepath.Join("number", "locales")
 	umbrellaLocales := "locales"
 
 	tags := enumerateTags(datetimeLocales)
 	// Sanity check: the number domain must offer the same per-locale set.
-	if numberTags := enumerateTags(numberLocales); !equalStrings(tags, numberTags) {
+	if numberTags := enumerateTags(numberLocales); !slices.Equal(tags, numberTags) {
 		log.Fatalf("datetime and number locale sets differ: datetime=%d number=%d", len(tags), len(numberTags))
 	}
 
@@ -78,6 +77,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	cldr.PruneLocaleDirs(umbrellaLocales, tags)
+
 	log.Printf("wrote %d locales/<tag>/<tag>_gen.go + locales/all", len(tags))
 }
 
@@ -104,16 +105,4 @@ func enumerateTags(dir string) []string {
 // en_GB). The directory keeps the canonical tag verbatim.
 func sanitize(tag string) string {
 	return strings.ReplaceAll(tag, "-", "_")
-}
-
-func equalStrings(a, b []string) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

@@ -1,8 +1,6 @@
 package plural_test
 
 import (
-	"encoding/json"
-	"os"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -30,26 +28,13 @@ type sampleRow struct {
 // The samples are committed under testdata/cldr_samples.json, produced by
 // internal/gen/samples.js (see that file to regenerate).
 func TestCLDRSamples(t *testing.T) {
-	data, err := os.ReadFile("testdata/cldr_samples.json")
-	require.NoError(t, err, "read samples")
-
-	var rows []sampleRow
-	require.NoError(t, json.Unmarshal(data, &rows), "unmarshal samples")
-	require.NotEmpty(t, rows, "no samples loaded")
+	rows := loadRows[sampleRow](t, "testdata/cldr_samples.json")
 
 	for _, r := range rows {
 		ops, err := plural.OperandsFromString(r.Value)
 		require.NoErrorf(t, err, "%s %s %q: OperandsFromString", r.Type, r.Locale, r.Value)
 
-		var got plural.Category
-		switch r.Type {
-		case "cardinal":
-			got = plural.Cardinal(r.Locale, ops)
-		case "ordinal":
-			got = plural.Ordinal(r.Locale, ops)
-		default:
-			require.Failf(t, "unknown type", "type %q", r.Type)
-		}
+		got := selectCategory(t, r.Type, r.Locale, ops)
 		assert.Equalf(t, r.Category, string(got),
 			"%s %s value=%q (ops=%+v)", r.Type, r.Locale, r.Value, ops)
 	}

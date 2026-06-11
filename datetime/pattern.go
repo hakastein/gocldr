@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/hakastein/gocldr/datetime/internal/data"
+	"github.com/hakastein/gocldr/internal/digits"
 )
 
 // formatCtx carries the resolved locale data and options through formatting.
@@ -26,6 +27,9 @@ type formatCtx struct {
 	// saving anywhere in the surrounding year. ICU resolves a LONG generic name
 	// to the zone's standard name when the zone never observes DST.
 	zoneObservesDST bool
+	// isUTC records whether t is rendered in UTC, which uses the dedicated CLDR
+	// UTC zone names instead of metazone names or GMT offsets.
+	isUTC bool
 	// pool caches the best-fit candidate pool built by skeletonPool.
 	pool map[string]string
 }
@@ -46,50 +50,117 @@ func (c *formatCtx) zoneKeepsHourWidth() bool {
 	return c.opts.Hour == "numeric" && c.opts.TimeZoneName != "" && c.opts.Second == ""
 }
 
+// pad formats an integer in ASCII digits, zero-padded to at least width.
+func pad(v, width int) string {
+	s := strconv.Itoa(v)
+	if len(s) < width {
+		s = strings.Repeat("0", width-len(s)) + s
+	}
+	return s
+}
+
 // num formats an integer with the locale's numbering-system digits, zero-padded
 // to at least minWidth.
 func (c *formatCtx) num(v, minWidth int) string {
-	s := strconv.Itoa(v)
-	if len(s) < minWidth {
-		s = strings.Repeat("0", minWidth-len(s)) + s
+	return digits.Substitute(pad(v, minWidth), c.digits)
+}
+
+// patternToken is one token of a CLDR pattern: a field run (letter != 0,
+// repeated count times) or a literal segment (letter == 0). text is the raw
+// source slice, quote characters included, so concatenating the texts of all
+// tokens reproduces the pattern.
+type patternToken struct {
+	letter rune
+	count  int
+	text   string
+}
+
+// literal resolves CLDR quoting in a literal token's text: surrounding quotes
+// are dropped and the escaped ” becomes one apostrophe.
+func (t patternToken) literal() string {
+	s := t.text
+	if !strings.HasPrefix(s, "'") {
+		return s
 	}
-	return c.localizeDigits(s)
+	if s == "''" {
+		return "'"
+	}
+	s = strings.TrimSuffix(s[1:], "'")
+	return strings.ReplaceAll(s, "''", "'")
+}
+
+// tokenizePattern splits a CLDR pattern into field runs (maximal runs of one
+// unquoted ASCII letter) and literal segments. A quoted section — including
+// any ” escapes inside it — forms a single literal token; unquoted non-letter
+// characters form one literal token per run.
+func tokenizePattern(pattern string) []patternToken {
+	var toks []patternToken
+	runes := []rune(pattern)
+	n := len(runes)
+	lit := -1
+	flush := func(end int) {
+		if lit >= 0 {
+			toks = append(toks, patternToken{text: string(runes[lit:end])})
+			lit = -1
+		}
+	}
+	for i := 0; i < n; {
+		ch := runes[i]
+		switch {
+		case ch == '\'':
+			flush(i)
+			j := i + 1
+			for j < n {
+				if runes[j] == '\'' {
+					if j+1 < n && runes[j+1] == '\'' {
+						j += 2
+						continue
+					}
+					break
+				}
+				j++
+			}
+			if j < n {
+				j++ // consume the closing quote
+			}
+			toks = append(toks, patternToken{text: string(runes[i:j])})
+			i = j
+		case isPatternLetter(ch):
+			flush(i)
+			j := i
+			for j < n && runes[j] == ch {
+				j++
+			}
+			toks = append(toks, patternToken{letter: ch, count: j - i, text: string(runes[i:j])})
+			i = j
+		default:
+			if lit < 0 {
+				lit = i
+			}
+			i++
+		}
+	}
+	flush(n)
+	return toks
+}
+
+func joinTokens(toks []patternToken) string {
+	var b strings.Builder
+	for _, t := range toks {
+		b.WriteString(t.text)
+	}
+	return b.String()
 }
 
 // interpret runs the CLDR pattern over t, emitting localized text.
 func (c *formatCtx) interpret(pattern string, t time.Time) string {
 	var b strings.Builder
-	runes := []rune(pattern)
-	n := len(runes)
-	for i := 0; i < n; {
-		ch := runes[i]
-		if ch == '\'' {
-			// Quoted literal. '' is a literal apostrophe.
-			if i+1 < n && runes[i+1] == '\'' {
-				b.WriteByte('\'')
-				i += 2
-				continue
-			}
-			i++
-			for i < n && runes[i] != '\'' {
-				b.WriteRune(runes[i])
-				i++
-			}
-			i++ // skip closing quote
-			continue
+	for _, tok := range tokenizePattern(pattern) {
+		if tok.letter != 0 {
+			b.WriteString(c.field(tok.letter, tok.count, t))
+		} else {
+			b.WriteString(tok.literal())
 		}
-		if isPatternLetter(ch) {
-			j := i
-			for j < n && runes[j] == ch {
-				j++
-			}
-			count := j - i
-			b.WriteString(c.field(ch, count, t))
-			i = j
-			continue
-		}
-		b.WriteRune(ch)
-		i++
 	}
 	return b.String()
 }
@@ -109,8 +180,6 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 		return c.month(ch, count, t)
 	case 'd': // day of month
 		return c.num(t.Day(), count)
-	case 'D': // day of year
-		return c.num(t.YearDay(), count)
 	case 'E', 'e', 'c': // weekday
 		return c.weekday(ch, count, t)
 	case 'a', 'b': // am/pm (b also handles noon/midnight)
@@ -143,27 +212,9 @@ func (c *formatCtx) field(ch rune, count int, t time.Time) string {
 		return c.quarter(ch, count, t)
 	case 'z', 'Z', 'O', 'v', 'V', 'X', 'x': // zone
 		return c.zone(ch, count, t)
-	case 'w': // week of year (ISO approximation; CLDR locale week data is not modelled)
-		return c.num(isoWeek(t), count)
-	case 'W': // week of month
-		return c.num(weekOfMonth(t), count)
 	}
 	// Unknown letter: emit as-is.
 	return strings.Repeat(string(ch), count)
-}
-
-func isoWeek(t time.Time) int {
-	_, w := t.ISOWeek()
-	return w
-}
-
-// weekOfMonth returns the 1-based week number within the month as successive
-// seven-day blocks from the 1st. CLDR's locale-aware week-of-month (which
-// depends on the first day of the week and the minimal-days rule) is not
-// modelled; this field is unreachable through Options and exists only for raw
-// CLDR patterns that contain 'W'.
-func weekOfMonth(t time.Time) int {
-	return (t.Day()-1)/7 + 1
 }
 
 func (c *formatCtx) era(count int, t time.Time) string {
@@ -230,6 +281,20 @@ func widthFor(count int) string {
 	}
 }
 
+// dayPeriodOptionWidth maps the DayPeriod option to a CLDR name width; ""
+// when the option is unset.
+func dayPeriodOptionWidth(opt string) string {
+	switch opt {
+	case "narrow":
+		return "narrow"
+	case "short":
+		return "abbreviated"
+	case "long":
+		return "wide"
+	}
+	return ""
+}
+
 func (c *formatCtx) weekday(ch rune, count int, t time.Time) string {
 	wd := int(t.Weekday()) // Sunday=0
 	// e/c can be numeric for count<=2 (local day-of-week). E is always text.
@@ -275,15 +340,8 @@ func (c *formatCtx) dayPeriod(ch rune, count int, t time.Time) string {
 		width = "narrow"
 	}
 	// DayPeriod option ("long"/"short"/"narrow") refines the width when set.
-	if c.opts.DayPeriod != "" {
-		switch c.opts.DayPeriod {
-		case "narrow":
-			width = "narrow"
-		case "short":
-			width = "abbreviated"
-		case "long":
-			width = "wide"
-		}
+	if w := dayPeriodOptionWidth(c.opts.DayPeriod); w != "" {
+		width = w
 	}
 	table := c.ld.DayPeriodsFmt
 	key := "am"
@@ -311,12 +369,7 @@ func (c *formatCtx) dayPeriod(ch rune, count int, t time.Time) string {
 	return ""
 }
 
-// flexDayPeriod renders the flexible day-period field 'B'. It selects the
-// locale's day-period key (morning1/afternoon1/evening1/night1, plus noon at
-// the exact noon instant) whose rule range contains t's wall-clock time, then
-// looks that key up in the format day-period names at the width implied by the
-// field count (B/BB/BBB -> abbreviated, BBBB -> wide, BBBBB -> narrow). When no
-// rule matches or the name is missing it falls back to the am/pm 'b' behaviour.
+// flexDayPeriod renders the flexible day-period field 'B'.
 //
 // Effective minute/second resolution mirrors Intl: the day period is evaluated
 // at the precision the formatter displays. When the request shows an hour but
@@ -327,21 +380,10 @@ func (c *formatCtx) flexDayPeriod(count int, t time.Time) string {
 	if len(rules) == 0 {
 		return c.dayPeriod('a', count, t)
 	}
-	width := "abbreviated"
-	switch {
-	case count >= 5:
-		width = "narrow"
-	case count == 4:
-		width = "wide"
-	}
+	width := widthFor(count)
 	// DayPeriod option width overrides the field-count width.
-	switch c.opts.DayPeriod {
-	case "narrow":
-		width = "narrow"
-	case "short":
-		width = "abbreviated"
-	case "long":
-		width = "wide"
+	if w := dayPeriodOptionWidth(c.opts.DayPeriod); w != "" {
+		width = w
 	}
 
 	h := t.Hour()
@@ -431,37 +473,26 @@ func (c *formatCtx) quarter(ch rune, count int, t time.Time) string {
 }
 
 func (c *formatCtx) fraction(count int, t time.Time) string {
-	// count = number of fractional digits requested.
-	ns := t.Nanosecond()
-	// Build the fractional string scaled to 9 digits, then take first `count`.
-	full := strconv.Itoa(ns)
-	full = strings.Repeat("0", 9-len(full)) + full
+	full := pad(t.Nanosecond(), 9)
 	if count > 9 {
 		full += strings.Repeat("0", count-9)
 	}
-	return c.localizeDigits(full[:count])
+	return digits.Substitute(full[:count], c.digits)
 }
 
-// zone renders a time zone field. For UTC it uses the CLDR zone names; for
-// other zones it falls back to a GMT offset formatted with the CLDR gmtFormat.
+// zone renders a time zone field: the CLDR UTC zone names for UTC, the
+// metazone / per-zone names for other zones, with a GMT offset formatted via
+// the CLDR gmtFormat as the fallback.
 func (c *formatCtx) zone(ch rune, count int, t time.Time) string {
-	name, off := t.Zone()
+	_, off := t.Zone()
 	z := c.ld.Zones
-
-	isUTC := off == 0 && (name == "UTC" || name == "" || strings.EqualFold(c.opts.TimeZone, "UTC") || strings.EqualFold(c.opts.TimeZone, "Etc/UTC"))
 
 	switch ch {
 	case 'z': // specific non-location name (standard/daylight)
 		long := count >= 4
-		if isUTC {
-			if long {
-				if v := z["utc.long"]; v != "" {
-					return v
-				}
-			} else {
-				if v := z["utc.short"]; v != "" {
-					return v
-				}
+		if c.isUTC {
+			if v := utcName(z, long); v != "" {
+				return v
 			}
 		}
 		if v := c.specificZoneName(t, long); v != "" {
@@ -470,15 +501,9 @@ func (c *formatCtx) zone(ch rune, count int, t time.Time) string {
 		return c.gmtOffset(off, z, count < 4)
 	case 'v', 'V': // generic non-location name
 		long := count >= 4
-		if isUTC {
-			if long {
-				if v := z["utc.long"]; v != "" {
-					return v
-				}
-			} else {
-				if v := z["utc.short"]; v != "" {
-					return v
-				}
+		if c.isUTC {
+			if v := utcName(z, long); v != "" {
+				return v
 			}
 		}
 		if v := c.genericZoneName(t, long); v != "" {
@@ -487,12 +512,22 @@ func (c *formatCtx) zone(ch rune, count int, t time.Time) string {
 		return c.gmtOffset(off, z, count < 4)
 	case 'O': // localized GMT
 		return c.gmtOffset(off, z, count < 4)
-	case 'Z': // ISO8601 basic / extended
-		return isoOffset(off, count)
-	case 'X', 'x':
-		return isoOffset(off, count)
+	case 'Z': // ISO8601 basic; ZZZZ is localized GMT, ZZZZZ extended
+		if count == 4 {
+			return c.gmtOffset(off, z, false)
+		}
+		return isoOffset(off, count, ch)
+	case 'X', 'x': // ISO8601, with and without "Z" for offset zero
+		return isoOffset(off, count, ch)
 	}
 	return ""
+}
+
+func utcName(z map[string]string, long bool) string {
+	if long {
+		return z["utc.long"]
+	}
+	return z["utc.short"]
 }
 
 func (c *formatCtx) gmtOffset(off int, z map[string]string, short bool) string {
@@ -511,30 +546,12 @@ func (c *formatCtx) gmtOffset(off int, z map[string]string, short bool) string {
 	h := a / 3600
 	m := (a % 3600) / 60
 	pat := z[sign]
-	body := c.localizeDigits(formatHourPattern(pat, h, m, short))
+	body := digits.Substitute(formatHourPattern(pat, h, m, short), c.digits)
 	gmt := z["gmt"]
 	if gmt == "" {
 		gmt = "GMT{0}"
 	}
 	return strings.Replace(gmt, "{0}", body, 1)
-}
-
-// localizeDigits maps ASCII digits in s to the locale's numbering-system
-// glyphs (e.g. fa's "−4" -> "−۴"). Non-decimal numbering systems are left
-// untouched.
-func (c *formatCtx) localizeDigits(s string) string {
-	if len(c.digits) != 10 || (c.digits[0] == '0' && c.digits[9] == '9') {
-		return s
-	}
-	var b strings.Builder
-	for _, ch := range s {
-		if ch >= '0' && ch <= '9' {
-			b.WriteRune(c.digits[ch-'0'])
-		} else {
-			b.WriteRune(ch)
-		}
-	}
-	return b.String()
 }
 
 // formatHourPattern fills a CLDR hourFormat half like "+HH:mm". For the short
@@ -580,11 +597,7 @@ func formatHourPattern(pat string, h, m int, short bool) string {
 						cnt = 2
 					}
 				}
-				s := strconv.Itoa(val)
-				for len(s) < cnt {
-					s = "0" + s
-				}
-				b.WriteString(s)
+				b.WriteString(pad(val, cnt))
 				i = j
 				continue
 			}
@@ -610,57 +623,30 @@ func formatHourPattern(pat string, h, m int, short bool) string {
 // specific or offset name. Only the literal touching the zone run is rewritten,
 // so the rest of the pattern is untouched.
 func normalizeZoneSeparator(pattern string) string {
-	runes := []rune(pattern)
-	n := len(runes)
-	// Find the zone run.
-	zStart, zEnd := -1, -1
-	inQuote := false
-	for i := 0; i < n; i++ {
-		ch := runes[i]
-		if ch == '\'' {
-			inQuote = !inQuote
-			continue
-		}
-		if inQuote {
-			continue
-		}
-		if fieldClass(ch) == 'z' {
-			if zStart < 0 {
-				zStart = i
-			}
-			zEnd = i
+	toks := tokenizePattern(pattern)
+	zi := -1
+	for i, tok := range toks {
+		if tok.letter != 0 && fieldClass(tok.letter) == 'z' {
+			zi = i
 		}
 	}
-	if zStart < 0 {
+	if zi < 0 {
 		return pattern
 	}
-	// Separator before the zone: literal run ending at zStart.
-	if zStart > 0 {
-		j := zStart - 1
-		for j >= 0 && !isPatternLetter(runes[j]) && runes[j] != '\'' {
-			j--
-		}
-		sep := string(runes[j+1 : zStart])
-		if strings.Contains(sep, ",") {
-			return string(runes[:j+1]) + " " + string(runes[zStart:])
+	for _, i := range []int{zi - 1, zi + 1} {
+		if i >= 0 && i < len(toks) && toks[i].letter == 0 &&
+			!strings.Contains(toks[i].text, "'") && strings.Contains(toks[i].text, ",") {
+			toks[i].text = " "
 		}
 	}
-	// Separator after the zone: literal run starting at zEnd+1.
-	if zEnd+1 < n {
-		j := zEnd + 1
-		for j < n && !isPatternLetter(runes[j]) && runes[j] != '\'' {
-			j++
-		}
-		sep := string(runes[zEnd+1 : j])
-		if strings.Contains(sep, ",") {
-			return string(runes[:zEnd+1]) + " " + string(runes[j:])
-		}
-	}
-	return pattern
+	return joinTokens(toks)
 }
 
-func isoOffset(off, count int) string {
-	if off == 0 && count < 4 {
+// isoOffset renders the ISO 8601 zone fields per UTS #35: "Z" stands in for
+// offset zero at every 'X' width and at ZZZZZ, never for 'x' or Z..ZZZ; the
+// extended (colon) format applies at X/x widths 3 and 5 and at ZZZZZ.
+func isoOffset(off, count int, ch rune) string {
+	if off == 0 && (ch == 'X' || (ch == 'Z' && count == 5)) {
 		return "Z"
 	}
 	sign := "+"
@@ -669,17 +655,12 @@ func isoOffset(off, count int) string {
 		sign = "-"
 		a = -off
 	}
-	h := a / 3600
-	m := (a % 3600) / 60
-	hh := strconv.Itoa(h)
-	if len(hh) < 2 {
-		hh = "0" + hh
-	}
-	mm := strconv.Itoa(m)
-	if len(mm) < 2 {
-		mm = "0" + mm
-	}
-	if count >= 3 {
+	hh := pad(a/3600, 2)
+	mm := pad((a%3600)/60, 2)
+	switch {
+	case ch != 'Z' && count == 1 && a%3600 == 0:
+		return sign + hh
+	case ch == 'Z' && count == 5, ch != 'Z' && (count == 3 || count == 5):
 		return sign + hh + ":" + mm
 	}
 	return sign + hh + mm

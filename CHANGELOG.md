@@ -6,6 +6,42 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+### Fixed
+
+- `plural`: no more panics on pathological inputs — huge compact exponents in
+  `OperandsFromString` are rejected, and `NewOperands` clamps fraction-digit
+  bounds to ECMA-402's ceiling of 100.
+- `plural`: values at or beyond 2^63 derive their operands from the last 18
+  integer digits, mirroring ICU, so categories match `Intl.PluralRules`
+  (fr `9.3e18` → `many`, not `one`).
+- `datetime`: a negative `FractionalSecondDigits` no longer panics, and a
+  request carrying only `FractionalSecondDigits` renders the fractional digits
+  instead of an unrelated weekday.
+- `datetime`: an unresolvable `Options.TimeZone` falls back to UTC
+  deterministically instead of being silently ignored (the doc comment states
+  the contract).
+- `datetime`: the ISO 8601 zone fields `Z`/`X`/`x` in raw CLDR patterns follow
+  UTS #35 — `"Z"` stands in for offset zero only at `X` widths and `ZZZZZ`,
+  `Z..ZZZ` render `+0000`, and `ZZZZ` is the localized GMT format.
+- `number`: `NaN` keeps the style affixes (`NaN%`, `$NaN`, de `NaN €`),
+  matching `Intl.NumberFormat`.
+- The generators fail fast on missing or malformed CLDR inputs instead of
+  silently substituting defaults, and prune stale `locales/<tag>` packages so
+  a CLDR bump leaves no orphaned data behind.
+
+### Changed
+
+- A repository-wide cleanup pass: duplicated logic now has one home
+  (a single quote-aware pattern tokenizer in `datetime`, one
+  rounding/trimming/operands pipeline in `internal/decimal`, one
+  digit-substitution helper, shared generator loaders and per-locale package
+  emitters), unreachable code paths are gone (LDML `w`/`W`/`D` field
+  handlers, dead fallback layers), and the eight unused generator CLI flags
+  were removed (`-out` remains). Generated tables shrank: the unread
+  `numberingSystems` map and the unused `Plus` symbol are no longer emitted.
+- The golden-fixture test suites assert every row directly; the redundant
+  match-rate/bucket reporting layer in `number` is gone.
+
 ## [0.2.0] - 2026-06-10
 
 ### Fixed

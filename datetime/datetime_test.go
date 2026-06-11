@@ -47,13 +47,7 @@ func toOptions(m map[string]any) datetime.Options {
 	o.DayPeriod = str("dayPeriod")
 	o.Calendar = str("calendar")
 	o.NumberingSystem = str("numberingSystem")
-	// Use the fixture's own timeZone (the generator stores the merged opts,
-	// including timeZone). Default to UTC when absent so legacy fixtures and the
-	// UTC-based instants still resolve correctly.
 	o.TimeZone = str("timeZone")
-	if o.TimeZone == "" {
-		o.TimeZone = "UTC"
-	}
 	if v, ok := m["hour12"]; ok {
 		if b, ok := v.(bool); ok {
 			o.Hour12 = &b
@@ -201,11 +195,74 @@ func TestFractionalSecondDigits(t *testing.T) {
 	}
 }
 
+// TestFractionalSecondDigitsOutOfRange covers fractionalSecondDigits values
+// outside the documented 1..3 range, which are treated as unset (no panic, no
+// fractional field).
+func TestFractionalSecondDigitsOutOfRange(t *testing.T) {
+	tm := time.Date(2021, 1, 6, 12, 30, 45, 123000000, time.UTC)
+	tests := []struct {
+		name string
+		frac int
+	}{
+		{"negative", -1},
+		{"zero", 0},
+		{"too large", 4},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := datetime.Options{Hour: "numeric", FractionalSecondDigits: intPtr(tc.frac), TimeZone: "UTC"}
+			assert.Equal(t, "12 PM", datetime.Format("en", tm, o))
+		})
+	}
+}
+
+// TestFractionalSecondDigitsWithoutSeconds covers fractionalSecondDigits when
+// no seconds field is requested. Verified against Node Intl: a bare request
+// renders just the fraction ("123"), and minute+fraction anchors the injected
+// fraction on a seconds field ("30:45.123") instead of silently dropping it.
+func TestFractionalSecondDigitsWithoutSeconds(t *testing.T) {
+	tm := time.Date(2021, 1, 6, 12, 30, 45, 123000000, time.UTC)
+	tests := []struct {
+		name string
+		opts datetime.Options
+		want string
+	}{
+		{"alone", datetime.Options{FractionalSecondDigits: intPtr(3), TimeZone: "UTC"}, "123"},
+		{"alone 1 digit", datetime.Options{FractionalSecondDigits: intPtr(1), TimeZone: "UTC"}, "1"},
+		{"with minute", datetime.Options{Minute: "numeric", FractionalSecondDigits: intPtr(3), TimeZone: "UTC"}, "30:45.123"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, datetime.Format("en", tm, tc.opts))
+		})
+	}
+}
+
+// TestInvalidTimeZoneFallsBackToUTC covers unrecognized TimeZone values: Intl
+// throws a RangeError, Format has no error return, so the contract is a
+// deterministic fallback to UTC regardless of the zone t carries.
+func TestInvalidTimeZoneFallsBackToUTC(t *testing.T) {
+	tm := time.Date(2021, 7, 1, 10, 4, 0, 0, time.FixedZone("X", -5*3600)) // 15:04 UTC
+	tests := []struct {
+		name string
+		zone string
+	}{
+		{"typo", "Amerca/New_York"},
+		{"garbage", "Not/AZone"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			o := datetime.Options{Hour: "numeric", Minute: "2-digit", TimeZoneName: "short", TimeZone: tc.zone}
+			assert.Equal(t, "3:04 PM UTC", datetime.Format("en", tm, o))
+		})
+	}
+}
+
 // TestZoneOffsetRendering covers the pure-math GMT offset formats. shortOffset
 // (O) drops ":mm" when minutes are zero and never zero-pads the hour (GMT-4,
 // GMT+5:30); longOffset (OOOO) always pads to GMT±HH:mm. The requested zone
 // width must be honored rather than collapsing to the matched candidate's own
-// zone letter. Name-based widths (z/v) for non-UTC zones are data-blocked.
+// zone letter.
 func TestZoneOffsetRendering(t *testing.T) {
 	base := datetime.Options{Hour: "numeric", Minute: "2-digit", Second: "2-digit"}
 	tests := []struct {

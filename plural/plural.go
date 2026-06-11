@@ -4,12 +4,7 @@
 // Intl.PluralRules exactly.
 //
 // The plural rule tables in tables_gen.go are produced by the generator in
-// internal/gen. To regenerate them, run:
-//
-//	go generate ./plural/...
-//
-// See internal/gen/main.go for how to repoint the generator at a different
-// copy of the CLDR data.
+// internal/gen; regenerate them with `make gen` (pinned Docker toolchain).
 package plural
 
 import (
@@ -85,9 +80,8 @@ func inRangeN(n float64, lo, hi int64) bool {
 	return n >= float64(lo) && n <= float64(hi)
 }
 
-// rule is the signature of a generated per-rule-set predicate. It receives the
-// operands and reports whether the operands match the rule for a given
-// category. Each generated rule set maps categories to such predicates.
+// rule is a generated predicate reporting whether the operands match a
+// category's CLDR conditions.
 type rule func(o Operands) bool
 
 // ruleSet maps plural categories (in evaluation order) to predicates. The
@@ -95,7 +89,7 @@ type rule func(o Operands) bool
 // every locale that shares those conditions at it.
 type ruleSet struct {
 	// cats lists the categories to test, in CLDR order. The last entry is
-	// always Other and its predicate always returns true.
+	// always Other and has no predicate; eval falls through to it.
 	cats  []Category
 	preds []rule
 }
@@ -121,74 +115,41 @@ func NewOperands(n float64, minFrac, maxFrac int) Operands {
 	if minFrac < 0 {
 		minFrac = 0
 	}
+	if minFrac > 100 {
+		minFrac = 100 // ECMA-402 fraction-digits ceiling
+	}
 	if maxFrac < minFrac {
 		maxFrac = minFrac
+	}
+	if maxFrac > 100 {
+		maxFrac = 100
 	}
 	neg := math.Signbit(n)
 	abs := math.Abs(n)
 	if math.IsInf(abs, 0) || math.IsNaN(abs) {
 		return Operands{N: abs}
 	}
-	// Round to maxFrac fraction digits half-away-from-zero on the shortest
-	// round-tripping decimal (ECMA-402's halfExpand; shared with the number
-	// formatter via internal/decimal), then trim trailing zeros down to minFrac
-	// for the canonical visible representation.
-	s := roundHalfAway(abs, maxFrac)
-	s = trimToMinFrac(s, minFrac)
+	// ECMA-402's halfExpand rounding, shared with the number formatter via
+	// internal/decimal.
+	intPart, fracPart := decimal.RoundFixed(abs, maxFrac)
+	s := intPart
+	if fracPart = decimal.TrimFrac(fracPart, minFrac); fracPart != "" {
+		s += "." + fracPart
+	}
 	if neg {
 		s = "-" + s
 	}
-	ops, err := OperandsFromString(s)
-	if err != nil {
-		// The freshly built decimal string can only fail to parse when its
-		// integer or fraction part exceeds int64 (|n| >= 2^63). Operands I/F
-		// cannot represent such a magnitude; N still drives rule selection and
-		// every locale categorises numbers that large as "other", so fall back
-		// to N alone.
-		return Operands{N: abs}
-	}
+	// s is a plain decimal digit string, so OperandsFromString cannot fail.
+	ops, _ := OperandsFromString(s)
 	return ops
-}
-
-// roundHalfAway rounds the non-negative value abs to exactly maxFrac fraction
-// digits (half-away-from-zero) and returns the fixed-notation decimal string;
-// callers trim trailing zeros down to minFrac afterwards.
-func roundHalfAway(abs float64, maxFrac int) string {
-	intPart, fracPart := decimal.RoundFixed(abs, maxFrac)
-	if fracPart == "" {
-		return intPart
-	}
-	return intPart + "." + fracPart
-}
-
-// trimToMinFrac removes trailing fractional zeros from a decimal string until
-// only minFrac fraction digits remain (never removing the digits required by
-// minFrac). If the string has no fraction part, minFrac zeros are appended.
-func trimToMinFrac(s string, minFrac int) string {
-	dot := strings.IndexByte(s, '.')
-	if dot < 0 {
-		if minFrac == 0 {
-			return s
-		}
-		return s + "." + strings.Repeat("0", minFrac)
-	}
-	frac := s[dot+1:]
-	// Trim trailing zeros but keep at least minFrac digits.
-	end := len(frac)
-	for end > minFrac && frac[end-1] == '0' {
-		end--
-	}
-	frac = frac[:end]
-	if frac == "" {
-		return s[:dot]
-	}
-	return s[:dot] + "." + frac
 }
 
 // OperandsFromString computes the plural operands from a canonical decimal
 // string. The string is authoritative for the fraction-digit operands
 // (V, W, F, T): the number of digits after the decimal point determines V/W
-// and their integer values determine F/T, exactly as written.
+// and their integer values determine F/T, exactly as written. Digit runs
+// longer than int64 can hold contribute their last 18 digits to I/F/T
+// (ICU's behaviour for huge values); V/W always count every digit.
 //
 // The accepted syntax is an optional leading '-' (or '+'), integer digits, an
 // optional '.' with fraction digits — at least one digit must be present
@@ -205,7 +166,6 @@ func OperandsFromString(s string) (Operands, error) {
 	if str[0] == '+' || str[0] == '-' {
 		str = str[1:] // operands are defined on the absolute value
 	}
-	// Split off the compact exponent suffix.
 	var compact int
 	if idx := strings.IndexAny(str, "ceCE"); idx >= 0 {
 		expPart := str[idx+1:]
@@ -214,14 +174,12 @@ func OperandsFromString(s string) (Operands, error) {
 		if err != nil {
 			return Operands{}, errors.New("plural: invalid compact exponent in " + strconv.Quote(s))
 		}
+		if e > 400 || e < -400 {
+			return Operands{}, errors.New("plural: exponent out of range in " + strconv.Quote(s))
+		}
 		compact = e
 	}
-	intPart := str
-	fracPart := ""
-	if dot := strings.IndexByte(str, '.'); dot >= 0 {
-		intPart = str[:dot]
-		fracPart = str[dot+1:]
-	}
+	intPart, fracPart := decimal.Split(str)
 	if intPart == "" && fracPart == "" {
 		return Operands{}, errors.New("plural: no digits in " + strconv.Quote(s))
 	}
@@ -239,38 +197,28 @@ func OperandsFromString(s string) (Operands, error) {
 	intPart, fracPart = shiftPoint(intPart, fracPart, compact)
 
 	var ops Operands
-	// I: integer value of the integer digits.
-	i64, err := strconv.ParseInt(intPart, 10, 64)
-	if err != nil {
-		return Operands{}, errors.New("plural: integer part overflow in " + strconv.Quote(s))
-	}
-	ops.I = i64
-
-	// V/F use the fraction digits as written (with trailing zeros).
+	ops.I = digitsValue(intPart)
 	ops.V = len(fracPart)
-	if fracPart != "" {
-		f64, err := strconv.ParseInt(fracPart, 10, 64)
-		if err != nil {
-			return Operands{}, errors.New("plural: fraction part overflow in " + strconv.Quote(s))
-		}
-		ops.F = f64
-	}
-
-	// W/T strip trailing zeros from the fraction digits. trimmed is a prefix of
-	// fracPart, which already parsed into F above, so it cannot overflow here.
+	ops.F = digitsValue(fracPart)
 	trimmed := strings.TrimRight(fracPart, "0")
 	ops.W = len(trimmed)
-	if trimmed != "" {
-		t64, _ := strconv.ParseInt(trimmed, 10, 64)
-		ops.T = t64
-	}
+	ops.T = digitsValue(trimmed)
 
-	// N: absolute numeric value (integer part plus fraction). Both digit
-	// strings were validated above and the integer part fits int64, so the
-	// composed literal (Go accepts a bare trailing '.') always parses.
+	// N: absolute numeric value. The composed literal always parses (Go
+	// accepts a bare trailing '.'); magnitudes beyond float64 saturate to +Inf.
 	ops.N, _ = strconv.ParseFloat(intPart+"."+fracPart, 64)
 	ops.C = compact
 	return ops, nil
+}
+
+// digitsValue converts a digit string to its integer value modulo 1e18,
+// matching how ICU derives the i/f/t operands when the digits exceed int64.
+func digitsValue(digits string) int64 {
+	if len(digits) > 18 {
+		digits = digits[len(digits)-18:]
+	}
+	v, _ := strconv.ParseInt(digits, 10, 64)
+	return v
 }
 
 func allDigits(s string) bool {
@@ -306,11 +254,7 @@ func shiftPoint(intPart, fracPart string, by int) (string, string) {
 			fracPart = strings.Repeat("0", -by) + fracPart
 		}
 	}
-	intPart = strings.TrimLeft(intPart, "0")
-	if intPart == "" {
-		intPart = "0"
-	}
-	return intPart, fracPart
+	return decimal.NormInt(intPart), fracPart
 }
 
 // lookup resolves a locale against a table by trying the exact (canonicalised)
@@ -327,7 +271,7 @@ func lookup(table map[string]*ruleSet, loc string) *ruleSet {
 }
 
 // otherOnly is the universal fallback rule set: everything is Other.
-var otherOnly = &ruleSet{cats: []Category{Other}, preds: []rule{func(Operands) bool { return true }}}
+var otherOnly = &ruleSet{cats: []Category{Other}}
 
 // Cardinal returns the cardinal plural category for the given operands in the
 // given locale.

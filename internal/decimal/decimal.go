@@ -32,15 +32,24 @@ func Shortest(abs float64) (intPart, fracPart string) {
 // minimum afterwards).
 func RoundFixed(abs float64, keepFrac int) (intPart, fracPart string) {
 	i, f := Shortest(abs)
-	return RoundDigits(i, f, keepFrac)
+	return roundDigits(i, f, keepFrac)
 }
 
-// RoundDigits rounds the decimal represented by intPart.fracPart to keep exactly
+// TrimFrac trims trailing zeros from a digit string, keeping at least min
+// digits.
+func TrimFrac(frac string, min int) string {
+	end := len(frac)
+	for end > min && frac[end-1] == '0' {
+		end--
+	}
+	return frac[:end]
+}
+
+// roundDigits rounds the decimal represented by intPart.fracPart to keep exactly
 // keepFrac fraction digits, half away from zero. intPart must have at least one
 // digit.
-func RoundDigits(intPart, fracPart string, keepFrac int) (string, string) {
+func roundDigits(intPart, fracPart string, keepFrac int) (string, string) {
 	if len(fracPart) <= keepFrac {
-		// Pad with zeros to reach keepFrac.
 		if keepFrac > 0 {
 			fracPart += strings.Repeat("0", keepFrac-len(fracPart))
 		} else {
@@ -49,12 +58,10 @@ func RoundDigits(intPart, fracPart string, keepFrac int) (string, string) {
 		return NormInt(intPart), fracPart
 	}
 
-	// Drop the digits beyond keepFrac, rounding on the first dropped digit
-	// (>= '5' rounds away from zero).
 	kept := fracPart[:keepFrac]
 	roundUp := fracPart[keepFrac] >= '5'
 
-	combined := intPart + kept // all kept digits, integer + fraction
+	combined := intPart + kept
 	if roundUp {
 		combined = Increment(combined)
 	}

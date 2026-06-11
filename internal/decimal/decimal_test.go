@@ -48,12 +48,3 @@ func TestNormInt(t *testing.T) {
 	assert.Equal(t, "5", decimal.NormInt("005"))
 	assert.Equal(t, "100", decimal.NormInt("100"))
 }
-
-func TestSplit(t *testing.T) {
-	i, f := decimal.Split("12.34")
-	assert.Equal(t, "12", i)
-	assert.Equal(t, "34", f)
-	i, f = decimal.Split("12")
-	assert.Equal(t, "12", i)
-	assert.Equal(t, "", f)
-}
