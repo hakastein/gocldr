@@ -26,8 +26,9 @@ func splitSubpatterns(pattern string) (subpattern, subpattern) {
 }
 
 // extractAffixes splits one subpattern into prefix, numeric body and suffix.
-// The numeric body is the maximal run containing only #, 0, comma and dot;
-// the generator guarantees every pattern has one.
+// The numeric body is the maximal run containing only #, 0, comma and dot.
+// A pattern without one (never produced by the generator) becomes a pure
+// literal prefix with an empty body.
 func extractAffixes(p string) subpattern {
 	runes := []rune(p)
 	start := -1
@@ -39,6 +40,9 @@ func extractAffixes(p string) subpattern {
 			}
 			end = i
 		}
+	}
+	if start < 0 {
+		return subpattern{prefix: p}
 	}
 	return subpattern{
 		prefix: string(runes[:start]),
