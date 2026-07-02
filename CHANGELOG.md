@@ -6,6 +6,21 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-02
+
+### Fixed
+
+- `number`: the pattern parser no longer relies on an unguarded invariant — a
+  CLDR pattern without a numeric body (never produced by the generator, but
+  previously a latent panic) now renders as a literal prefix.
+
+### Added
+
+- README: a "What's not implemented" section enumerating the `Intl.*` options
+  each package deliberately omits, and an explicit note that locale fallback
+  is silent (root symbols for `number`, RFC 3339 output for `datetime` when
+  no locale data is linked).
+
 ## [0.3.0] - 2026-06-11
 
 ### Fixed
@@ -126,7 +141,8 @@ to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   modularized and no single generated table is large enough to require the newer
   toolchain.
 
-[Unreleased]: https://github.com/hakastein/gocldr/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/hakastein/gocldr/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/hakastein/gocldr/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/hakastein/gocldr/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/hakastein/gocldr/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/hakastein/gocldr/compare/v0.1.1...v0.1.2
