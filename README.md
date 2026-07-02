@@ -102,7 +102,10 @@ import (
 
 If a requested locale is not registered, the formatters fall back through the
 CLDR parent chain rather than failing (`number` ends at root data, `datetime`
-at `en`; see [ARCHITECTURE.md](ARCHITECTURE.md) for the exact chains).
+at `en`; see [ARCHITECTURE.md](ARCHITECTURE.md) for the exact chains). The
+fallback is **silent**: with no matching data linked at all, `number` formats
+with root (ASCII) symbols and `datetime` returns the time as RFC 3339. If
+output looks un-localized, a missing blank import is the first thing to check.
 
 ## Packages
 
@@ -111,6 +114,26 @@ at `en`; see [ARCHITECTURE.md](ARCHITECTURE.md) for the exact chains).
 | [`datetime`](https://pkg.go.dev/github.com/hakastein/gocldr/datetime) | `Intl.DateTimeFormat` | dates, times, combined styles, skeletons, eras, time-zone names |
 | [`number`](https://pkg.go.dev/github.com/hakastein/gocldr/number) | `Intl.NumberFormat` | decimals, percent, currency, grouping, significant/fraction digits |
 | [`plural`](https://pkg.go.dev/github.com/hakastein/gocldr/plural) | `Intl.PluralRules` | cardinal and ordinal plural categories |
+
+## What's not implemented
+
+Each package covers the commonly used subset of its `Intl.*` option bag, not
+every option. The notable gaps:
+
+- **`number`** — no `notation` (compact, scientific, engineering), `unit`
+  style, `signDisplay`, `currencySign: "accounting"`, `roundingMode` (rounding
+  is always half-away-from-zero), `roundingIncrement`, `roundingPriority`,
+  `trailingZeroDisplay`, or per-call `numberingSystem` override (each locale
+  formats with its default digit set). Unlike `Intl.NumberFormat`,
+  `Style: "currency"` without a `Currency` code formats the bare number
+  instead of throwing.
+- **`datetime`** — Gregorian calendar only (the `Calendar` option accepts but
+  ignores other values); no `hourCycle` (only the boolean `Hour12`), range
+  formatting (`formatRange`), or `formatToParts` — `Format` returns a plain
+  string.
+- **`plural`** — no `selectRange`; significant-digit-driven selection is
+  available through `number.CardinalCategory` / `number.PluralOperands`
+  rather than the `plural` package itself.
 
 ## Correctness
 
